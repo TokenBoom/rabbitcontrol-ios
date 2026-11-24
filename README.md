@@ -43,7 +43,7 @@ xcodebuild test \
   -destination "$(./scripts/simulator-destination.sh)"
 ```
 
-CI（`.github/workflows/ci.yml`）在 macOS runner 上执行同一套流程：安装 XcodeGen、生成工程、在模拟器上构建并测试。
+CI（`.github/workflows/ci.yml`）在 macOS runner 上执行同一套流程：安装 XcodeGen、生成工程、在模拟器上构建并测试。与 Rust 仓库的 `-D warnings` 一致，CI 上编译警告视为错误。
 
 ## 工程配置
 

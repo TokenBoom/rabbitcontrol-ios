@@ -43,12 +43,14 @@ jobs:
       - name: Test
         shell: bash
         run: |
+          # 与 Rust 仓库的 -D warnings 一致：CI 上编译警告视为错误
           xcodebuild test \
             -project RabbitControlIOS.xcodeproj \
             -scheme RabbitControlIOS \
             -destination "$DESTINATION" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
             | xcbeautify
       - name: Upload test results
         if: always()
