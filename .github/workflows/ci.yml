@@ -26,7 +26,7 @@ jobs:
       - name: Show toolchain versions
         run: |
           xcodebuild -version
-          xcrun simctl list runtimes | grep iOS
+          xcrun simctl list runtimes | grep iOS || true
       - name: Install XcodeGen
         run: |
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/xcodegen.zip" \
@@ -36,7 +36,10 @@ jobs:
       - name: Generate project
         run: xcodegen generate
       - name: Select simulator
-        run: echo "DESTINATION=$(./scripts/simulator-destination.sh)" >> "$GITHUB_ENV"
+        run: |
+          destination="$(./scripts/simulator-destination.sh)"
+          echo "destination: $destination"
+          echo "DESTINATION=$destination" >> "$GITHUB_ENV"
       - name: Test
         shell: bash
         run: |
