@@ -1,0 +1,56 @@
+name: iOS CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODEGEN_VERSION: "2.48.0"
+
+jobs:
+  ios-app:
+    name: iOS App (build + test)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep iOS
+      - name: Install XcodeGen
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          ditto -x -k "$RUNNER_TEMP/xcodegen.zip" "$RUNNER_TEMP/xcodegen"
+          echo "$(dirname "$(find "$RUNNER_TEMP/xcodegen" -type f -path '*/bin/xcodegen')")" >> "$GITHUB_PATH"
+      - name: Generate project
+        run: xcodegen generate
+      - name: Select simulator
+        run: echo "DESTINATION=$(./scripts/simulator-destination.sh)" >> "$GITHUB_ENV"
+      - name: Test
+        shell: bash
+        run: |
+          xcodebuild test \
+            -project RabbitControlIOS.xcodeproj \
+            -scheme RabbitControlIOS \
+            -destination "$DESTINATION" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            | xcbeautify
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: ${{ runner.temp }}/TestResults.xcresult
+          if-no-files-found: ignore

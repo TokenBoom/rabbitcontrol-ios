@@ -1,0 +1,93 @@
+# RabbitControl iOS 的工程定义。
+#
+# RabbitControlIOS.xcodeproj 由 `xcodegen generate` 根据本文件生成，属于构建产物，不纳入版本控制；
+# 修改本文件后需要重新生成。源码目录是 Xcode 同步文件夹，新增源码文件时无需改动本文件。
+name: RabbitControlIOS
+
+options:
+  bundleIdPrefix: com.rabbitcontrol
+  # 与中文界面保持一致，之后引入字符串目录时以此为源语言
+  developmentLanguage: zh-Hans
+  # 同步文件夹从该工程格式（Xcode 16）起可用
+  projectFormat: xcode16_0
+  xcodeVersion: "26.0"
+  deploymentTarget:
+    iOS: "18.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    # 严格并发检查下，类型默认隔离到 MainActor，并启用 approachable concurrency
+    SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  RabbitControlIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: RabbitControlIOS
+        type: syncedFolder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # 不单独维护 Info.plist，由下列构建设置生成
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: RabbitControl
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "RabbitControl 需要本地网络权限以发现局域网内的设备并建立低延迟直连。"
+
+  RabbitControlIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: RabbitControlIOSTests
+        type: syncedFolder
+    dependencies:
+      - target: RabbitControlIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  RabbitControlIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: RabbitControlIOSUITests
+        type: syncedFolder
+    dependencies:
+      - target: RabbitControlIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
+        # XCUITest 的 XCTestCase 子类不能整体隔离到 MainActor（会与 XCTest 中 nonisolated 的初始化方法冲突），
+        # XCUITest 本身就在主线程上执行。
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+
+schemes:
+  RabbitControlIOS:
+    build:
+      targets:
+        RabbitControlIOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - RabbitControlIOSTests
+        - RabbitControlIOSUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
