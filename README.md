@@ -1,6 +1,6 @@
 # RabbitControl iOS (`TokenBoom/rabbitcontrol-ios`)
 
-RabbitControl iOS 客户端，基于 SwiftUI 构建。当前仓库已实现移动端 UI（可控设备列表、远程协助、我的、设备详情与远控会话界面），数据全部为 mock（与设计文档 §6.0 对齐），尚未接入 [`TokenBoom/rabbitcontrol-core`](https://github.com/TokenBoom/rabbitcontrol-core) 的传输与远控能力，会话画面为占位。
+RabbitControl iOS 是 macOS 的主控端，不提供 iPhone 整机被控服务。账号设备可通过九位码连接，也支持手动直连。仅观看会话不能发送键鼠或使用远程工具；设备预览来自本次运行收到的画面。UI 回归测试可显式使用 mock 数据。
 
 ## 仓库结构
 
@@ -16,7 +16,7 @@ RabbitControl iOS 客户端，基于 SwiftUI 构建。当前仓库已实现移�
 
 ## 本地开发
 
-需要 Xcode 26 或更新版本、iOS 模拟器运行时，以及 XcodeGen 2.46 或更新版本（`brew install xcodegen`）。
+需要 Xcode 26 或更新版本、iOS 模拟器运行时，以及 XcodeGen 2.46 或更新版本。先把与本工作区匹配的 Apple Media xcframework 放入 `Vendor/`；如果两个仓库相邻，也可在 iOS 仓运行 `./scripts/build-core-xcframework.sh` 从源码生成。旧版媒体库不含新的 Metal、剪贴板接口。
 
 ```bash
 xcodegen generate             # 生成 RabbitControlIOS.xcodeproj
@@ -43,7 +43,9 @@ xcodebuild test \
   -destination "$(./scripts/simulator-destination.sh)"
 ```
 
-CI（`.github/workflows/ci.yml`）在 macOS runner 上执行同一套流程：安装 XcodeGen、生成工程、在模拟器上构建并测试。与 Rust 仓库的 `-D warnings` 一致，CI 上编译警告视为错误。
+CI 使用固定版本的 Apple Media release，不会使用本地生成的媒体库。调整媒体接口时，先发布匹配的媒体库，再更新 iOS CI 的 `XCF_TAG`。
+
+账号与工具的集成测试只应使用临时的本机服务、测试账号和隔离模拟器。Mac 测试宿主是 `rc-cli` 的 `ios_accept_local` example，须显式启用 `ios-acceptance` feature；默认不注册真实采集，键鼠、锁屏和剪贴板均使用测试后端。只有检查真实桌面帧时才添加 `--capture-display` 并为该宿主授予 macOS 录屏权限。测试画面不算真实桌面验收。
 
 ## 工程配置
 
@@ -52,7 +54,7 @@ CI（`.github/workflows/ci.yml`）在 macOS runner 上执行同一套流程：�
 | 部署目标 | iOS 18.0，支持 iPhone 与 iPad |
 | Bundle ID | `com.rabbitcontrol.ios` |
 | Swift | 6 语言模式，默认 MainActor 隔离（UI 测试目标除外） |
-| Info.plist | 不单独维护文件，由 `project.yml` 中的 `INFOPLIST_KEY_*` 生成 |
+| Info.plist | 由 `project.yml` 生成；仅文稿目录对「文件」App 可见，凭证不在文稿中 |
 
 真机运行之前，需要在 `project.yml` 的 `RabbitControlIOS` target 里填上 `DEVELOPMENT_TEAM`，然后重新生成工程。
 

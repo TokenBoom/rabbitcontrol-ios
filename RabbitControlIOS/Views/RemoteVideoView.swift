@@ -1,103 +1,63 @@
-import CoreImage
-import RabbitControlCore
 import SwiftUI
 
-/// 远端视频帧渲染:定时从 core 帧槽取 CVPixelBuffer,经 CoreImage 转为 CGImage 显示。
-///
-/// v1 采用 CIImage→CGImage 路径(GPU 色彩转换,CPU 拷贝一份);后续可换
-/// CVMetalTextureCache 零拷贝。帧所有权:take 即转移,渲染完成后必须 release。
-final class VideoFrameRenderer {
-    private let ciContext = CIContext()
-    private var lastSeq: UInt64 = 0
-
-    /// 尝试取新帧并渲染为 CGImage;无新帧返回 nil。调用线程不限。
-    func renderLatest() -> CGImage? {
-        guard let rawPtr = rc_apple_media_frame_take() else { return nil }
-        defer { rc_string_free(rawPtr) }
-        let json = String(cString: rawPtr)
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ptr = obj["ptr"] as? UInt64, ptr != 0,
-              let width = obj["width"] as? Int,
-              let height = obj["height"] as? Int,
-              let seq = obj["seq"] as? UInt64 else { return nil }
-        guard seq != lastSeq else {
-            rc_apple_media_frame_release(ptr)
-            return nil
-        }
-        lastSeq = seq
-        let pixelBuffer = Unmanaged<CVPixelBuffer>.fromOpaque(
-            UnsafeRawPointer(bitPattern: UInt(ptr))!
-        ).takeUnretainedValue()
-        defer { rc_apple_media_frame_release(ptr) }
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        return ciContext.createCGImage(
-            image,
-            from: CGRect(x: 0, y: 0, width: width, height: height)
-        )
-    }
-}
-
-/// 远端画面视图:CADisplayLink 驱动取帧,手势转为归一化输入事件。
+/// 远端画面视图:Metal 视图驱动取帧,触控层负责手势与归一化输入映射。
 struct RemoteVideoView: View {
     var session: SessionService
-    var onTapBackground: (() -> Void)?
+    var watchOnly: Bool
+    var showMouseTools: Bool
+    var zoomPan: ZoomPanState
+    var inputEnabled = true
+    var previewDeviceID: String?
 
-    @State private var frame: CGImage?
-    @State private var renderer = VideoFrameRenderer()
-    /// 触控按下期间持续上报移动(模拟鼠标拖拽)。
-    @State private var touchActive = false
+    @State private var showCaptureHint = false
+    @Environment(\.scenePhase) private var phase
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 RCColor.stageBg
-                if let frame {
-                    Image(decorative: frame, scale: 1)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
+                MetalVideoView(zoomPan: zoomPan, previewDeviceID: previewDeviceID)
+                if inputEnabled {
+                    TouchInputView(session: session, zoomPan: zoomPan, watchOnly: watchOnly)
+                }
+                if !zoomPan.hasPresentedFrame {
                     VStack(spacing: 10) {
-                        ProgressView()
-                            .tint(.white)
-                        Text(session.state.displayText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
+                        ProgressView().tint(.white)
+                        Text("已连接，等待桌面画面…").font(.headline)
+                        if showCaptureHint {
+                            Text("长时间没有画面？请在 Mac 上检查屏幕录制权限。").font(.footnote)
+                        }
+                    }.foregroundStyle(.white).multilineTextAlignment(.center).padding()
+                        .allowsHitTesting(false)
+                        .task {
+                            try? await Task.sleep(for: .seconds(8))
+                            if !Task.isCancelled { showCaptureHint = true }
+                        }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            .gesture(dragGesture(in: geo.size))
-            .onTapGesture {
-                // 单击=鼠标左键点按
-                session.sendMouseButton(button: "left", pressed: true)
-                session.sendMouseButton(button: "left", pressed: false)
-                onTapBackground?()
-            }
-        }
-        .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
-            if let newFrame = renderer.renderLatest() {
-                frame = newFrame
-            }
-        }
-    }
-
-    /// 拖拽:起点按下左键,移动上报归一化坐标,抬起释放。
-    private func dragGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if !touchActive {
-                    touchActive = true
-                    session.sendMouseButton(button: "left", pressed: true)
+            .overlay(alignment: .trailing) {
+                if !watchOnly && showMouseTools {
+                    VStack(spacing: 8) {
+                        Button { session.sendWheel(delta: 3) } label: { RabbitIcon(.arrowUp, size: 18).frame(width: 36, height: 36) }
+                            .accessibilityLabel("向上滚动")
+                        Divider().frame(width: 20).overlay(.white.opacity(0.25))
+                        Button { session.sendWheel(delta: -3) } label: { RabbitIcon(.arrowDown, size: 18).frame(width: 36, height: 36) }
+                            .accessibilityLabel("向下滚动")
+                    }
+                    .padding(6)
+                    .foregroundStyle(.white)
+                    .background(RCColor.hudBg, in: Capsule())
+                    .safeAreaPadding(.trailing, 10)
                 }
-                let nx = value.location.x / max(size.width, 1)
-                let ny = value.location.y / max(size.height, 1)
-                session.sendMouseMove(nx: nx, ny: ny)
             }
-            .onEnded { _ in
-                touchActive = false
-                session.sendMouseButton(button: "left", pressed: false)
+            .onDisappear {
+                session.releasePressedInput()
             }
+            .onChange(of: phase) {
+                if phase != .active { session.releasePressedInput() }
+            }
+        }
     }
 }

@@ -1,139 +1,208 @@
 import SwiftUI
+import UIKit
 
-/// 「我的」页(O3 账户移动端适配):账户卡片 + 设置入口列表。
 struct ProfileView: View {
     @State private var showChangePassword = false
     @State private var showServerConfig = false
     @State private var showLogoutConfirm = false
-
+    @State private var showThemeDialog = false
+    @State private var input = InteractionPrefs.shared
     private var auth: AuthService { .shared }
+    private var runtime: RuntimeService { .shared }
+
+    private var serverSummary: String {
+        let host = auth.serverTarget.host.isEmpty ? "未配置" : auth.serverTarget.host
+        return auth.savedServers.count > 1 ? "\(host) (\(auth.savedServers.count))" : host
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("我的")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(RCColor.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
+                    .font(.largeTitle.bold())
+                    .padding(.top, 8)
 
-                // 账户卡片
-                HStack(spacing: 14) {
-                    Image(systemName: "person.circle.fill")
-                        .font(.system(size: 44))
-                        .foregroundStyle(RCColor.accent)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(auth.session?.email ?? MockData.accountPhone)
-                            .font(.system(size: 18, weight: .semibold))
+                accountCard
+
+                cardGroup {
+                    rowButton(icon: .server, title: "服务器管理", trailing: serverSummary) {
+                        showServerConfig = true
+                    }
+                    .accessibilityIdentifier("profile.服务器设置")
+
+                    Divider().padding(.leading, 44)
+
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        rowContent(icon: .settings, title: "远控默认设置", trailing: input.touchMode.label)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("profile.设置")
+
+                    Divider().padding(.leading, 44)
+
+                    rowButton(icon: .display, title: "外观主题", trailing: input.themeMode.label) {
+                        showThemeDialog = true
+                    }
+                    .accessibilityIdentifier("profile.外观主题")
+                }
+
+                cardGroup {
+                    if auth.isLoggedIn {
+                        rowButton(icon: .security, title: "修改密码") {
+                            showChangePassword = true
+                        }
+                        .accessibilityIdentifier("profile.修改密码")
+
+                        Divider().padding(.leading, 44)
+                    }
+                    HStack(spacing: 12) {
+                        RabbitIcon(.devices, size: 20)
+                            .foregroundStyle(RCColor.textSecondary)
+                            .frame(width: 24)
+                        Text("关于 RabbitControl")
                             .foregroundStyle(RCColor.textPrimary)
-                            .accessibilityIdentifier("profile.phone")
-                        Text(auth.session?.displayName.isEmpty == false ? auth.session?.displayName ?? "" : "RabbitControl 账户")
-                            .font(.system(size: 13))
+                        Spacer()
+                        Text("v\(appVersion)")
+                            .font(.subheadline.monospaced())
                             .foregroundStyle(RCColor.textSecondary)
                     }
-                    Spacer()
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 50)
                 }
-                .padding(20)
-                .background(.white, in: RoundedRectangle(cornerRadius: 12))
 
                 if auth.isLoggedIn {
                     Button(role: .destructive) {
                         showLogoutConfirm = true
                     } label: {
                         Text("退出登录")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(RCColor.danger)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                            .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("profile.退出登录")
                 }
-
-                // 入口列表
-                VStack(spacing: 0) {
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        rowContent(icon: "gearshape", title: "设置")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("profile.设置")
-                    divider
-                    if auth.isLoggedIn {
-                        Button {
-                            showChangePassword = true
-                        } label: {
-                            rowContent(icon: "lock.shield", title: "修改密码")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("profile.修改密码")
-                        divider
-                        Button {
-                            showServerConfig = true
-                        } label: {
-                            rowContent(icon: "server.rack", title: "服务器设置")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("profile.服务器设置")
-                        divider
-                    }
-                    row(icon: "bell", title: "消息通知")
-                    divider
-                    row(icon: "info.circle", title: "关于 RabbitControl")
-                }
-                .background(.white, in: RoundedRectangle(cornerRadius: 12))
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 110)
+            .padding(.bottom, 24)
         }
         .background(RCColor.bgPage)
-        .navigationBarHidden(true)
-        .sheet(isPresented: $showChangePassword) {
-            ChangePasswordSheet()
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
+        .sheet(isPresented: $showServerConfig) { ServerConfigSheet() }
+        .confirmationDialog("外观主题", isPresented: $showThemeDialog, titleVisibility: .visible) {
+            Button(AppThemeMode.system == input.themeMode ? "跟随系统（当前）" : "跟随系统") { input.themeMode = .system }
+            Button(AppThemeMode.light == input.themeMode ? "浅色（当前）" : "浅色") { input.themeMode = .light }
+            Button(AppThemeMode.dark == input.themeMode ? "深色（当前）" : "深色") { input.themeMode = .dark }
+            Button("取消", role: .cancel) {}
         }
-        .sheet(isPresented: $showServerConfig) {
-            ServerConfigSheet()
-        }
-        .confirmationDialog("确定退出登录?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) {
-                auth.logout()
+        .confirmationDialog("退出当前账号？", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+            Button("退出登录", role: .destructive) { auth.logout() }
+            Button("取消", role: .cancel) {}
+        } message: { Text("将断开当前会话并清除本机账号信息，不会解绑设备。") }
+    }
+
+    private var accountCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                RabbitIcon(.person, size: 24)
+                    .foregroundStyle(RCColor.accent)
+                    .frame(width: 48, height: 48)
+                    .background(RCColor.accent.opacity(0.12), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(auth.session?.displayName.nonEmpty ?? "RabbitControl 账户")
+                        .font(.headline)
+                        .foregroundStyle(RCColor.textPrimary)
+                    Text(auth.session?.email ?? "未登录")
+                        .font(.subheadline)
+                        .foregroundStyle(RCColor.textSecondary)
+                        .accessibilityIdentifier("profile.phone")
+                }
+                Spacer()
+            }
+
+            if auth.isLoggedIn {
+                Divider()
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(runtime.signalRunning ? Color.green : Color.orange)
+                        .frame(width: 8, height: 8)
+                    Text(signalStatusText)
+                        .font(.caption)
+                        .foregroundStyle(RCColor.textSecondary)
+                        .lineLimit(1)
+                    Spacer()
+                    if let ownID = runtime.deviceID, !ownID.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = ownID
+                            ToastCenter.shared.show("已复制本机码")
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(AssistView.display(ownID.replacingOccurrences(of: " ", with: "")))
+                                    .font(.caption.monospaced())
+                                RabbitIcon(.clipboard, size: 13)
+                            }
+                            .foregroundStyle(RCColor.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
+        .padding(16)
+        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var divider: some View {
-        RCColor.divider
-            .frame(height: 1)
-            .padding(.leading, 56)
+    private var signalStatusText: String {
+        if runtime.signalRunning { return "信令在线" }
+        if let err = runtime.lastError, !err.isEmpty { return "信令异常：\(err)" }
+        return "信令连接中…"
     }
 
-    private func rowContent(icon: String, title: String) -> some View {
+    private func cardGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            content()
+        }
+        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func rowButton(icon: RabbitIcon.Name, title: String, trailing: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            rowContent(icon: icon, title: title, trailing: trailing)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func rowContent(icon: RabbitIcon.Name, title: String, trailing: String? = nil) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
+            RabbitIcon(icon, size: 20)
                 .foregroundStyle(RCColor.accent)
                 .frame(width: 24)
             Text(title)
-                .font(.system(size: 14))
                 .foregroundStyle(RCColor.textPrimary)
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12))
-                .foregroundStyle(RCColor.textDisabled)
+            if let trailing, !trailing.isEmpty {
+                Text(trailing)
+                    .font(.subheadline)
+                    .foregroundStyle(RCColor.textSecondary)
+                    .lineLimit(1)
+            }
+            RabbitIcon(.chevronRight, size: 14)
+                .foregroundStyle(RCColor.textSecondary.opacity(0.6))
         }
         .padding(.horizontal, 16)
-        .frame(height: 52)
+        .frame(minHeight: 50)
+        .contentShape(Rectangle())
     }
+}
 
-    private func row(icon: String, title: String) -> some View {
-        Button {
-            ToastCenter.shared.show("功能开发中")
-        } label: {
-            rowContent(icon: icon, title: title)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("profile.\(title)")
-    }
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

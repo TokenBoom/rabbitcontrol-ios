@@ -56,6 +56,9 @@ char *rc_auth_remove_device(const char *json);
 /// 账号设备列表:{server..., "access_token"};返回 MyDeviceInfo 数组 JSON。
 char *rc_auth_list_devices(const char *json);
 
+/// Revoke this login using the access and refresh tokens supplied by Keychain.
+char *rc_auth_logout(const char *json);
+
 // ── 远控会话(非阻塞;open 后立即返回,进度经 poll 推送)──
 
 /// 打开会话(直连模式):{"connect_addr":"ip:port","password"?,"watch_only"?,"width"?,"height"?,"fps"?,"bitrate_bps"?}
@@ -81,6 +84,11 @@ char *rc_session_close(const char *json);
 /// 注册 Apple 媒体通路(VT 解码器+帧泵渲染器),幂等,返回 1 成功。
 /// App 启动时调用一次;来自 rabbitcontrol-apple-media 仓(合并进本 xcframework)。
 int rc_apple_media_init(void);
+void rc_apple_clipboard_reset(void);
+int rc_apple_clipboard_send(const char *json_text);
+char *rc_apple_clipboard_take(void);
+/// 帧链路诊断计数 JSON:{"presented_cvpb","presented_cpu","taken"}。用毕 rc_string_free。
+char *rc_apple_media_stats(void);
 
 /// 取走最新帧(所有权转移):{"ptr": u64, "width", "height", "seq"},无帧返回 {}。
 /// ptr 即 CVPixelBufferRef;用毕必须调 rc_apple_media_frame_release。
@@ -95,3 +103,18 @@ void rc_apple_media_frame_release(unsigned long long ptr);
 #endif
 
 #endif // RABBITCONTROL_CORE_H
+
+// ── 运行时(有状态:认证会话+信令+一键连接)──
+char *rc_runtime_init(const char *json);
+char *rc_runtime_login(const char *json);
+char *rc_runtime_set_session(const char *json);
+char *rc_runtime_status(void);
+char *rc_runtime_logout(void);
+char *rc_signal_start(const char *json);
+char *rc_signal_status(const char *json);
+char *rc_signal_stop(void);
+char *rc_runtime_connect(const char *json);
+
+// ── 工具通道(文件/终端/端口映射)──
+char *rc_tools_call(uint64_t session_id, const char *json);
+char *rc_tools_poll(uint64_t session_id);

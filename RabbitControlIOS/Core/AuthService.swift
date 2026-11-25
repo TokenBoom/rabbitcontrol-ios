@@ -5,7 +5,7 @@ import UIKit
 /// 认证服务:对接 rabbitcontrol-server,管理登录会话与账号设备列表。
 ///
 /// FFI 调用全部为阻塞式,一律经 `Task.detached` 在后台线程执行。
-/// 会话持久化在 UserDefaults(后续应迁移 Keychain,标注 TODO)。
+/// UI 登录令牌仅写入本机钥匙串。
 @Observable
 final class AuthService {
     static let shared = AuthService()
@@ -13,6 +13,21 @@ final class AuthService {
     struct ServerTarget: Codable, Hashable {
         var host: String
         var useHTTPS: Bool
+        /// TOFU 信任的 CA PEM(probe 时抓取);HTTPS 模式下校验用。
+        var caCertPem: String?
+        var apiPort: UInt16?
+        var effectiveAPIPort: UInt16 { apiPort ?? 21118 }
+        var payload: [String: Any] {
+            var data: [String: Any] = ["server_host": host, "api_port": effectiveAPIPort, "use_https": useHTTPS]
+            data["ca_cert_pem"] = caCertPem
+            return data
+        }
+
+        init(host: String, useHTTPS: Bool, caCertPem: String? = nil) {
+            self.host = host
+            self.useHTTPS = useHTTPS
+            self.caCertPem = caCertPem
+        }
 
         static let local = ServerTarget(host: "127.0.0.1", useHTTPS: false)
     }
@@ -24,6 +39,24 @@ final class AuthService {
         var displayName: String
         var serverHost: String
         var useHTTPS: Bool
+        var userID: String?
+        var expiresAt: TimeInterval?
+        var mustChangePassword: Bool?
+        var apiPort: UInt16?
+        func matches(_ target: ServerTarget) -> Bool {
+            serverHost == target.host && useHTTPS == target.useHTTPS && (apiPort ?? 21118) == target.effectiveAPIPort
+        }
+    }
+
+    struct SavedServer: Codable, Hashable, Identifiable {
+        var name: String?
+        var target: ServerTarget
+        var email: String?
+        var id: String { "\(target.host):\(target.effectiveAPIPort):\(target.useHTTPS)" }
+        var displayName: String {
+            let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? target.host : trimmed
+        }
     }
 
     /// 当前服务器配置;持久化于 UserDefaults,默认本机调试实例。
@@ -35,10 +68,74 @@ final class AuthService {
         }
     }
 
+    /// 已保存的常用服务器(含各自最近登录邮箱),UserDefaults 持久化。
+    private(set) var savedServers: [SavedServer] = []
+
+    func rememberServer(_ target: ServerTarget, email: String? = nil, name: String? = nil) {
+        var list = savedServers
+        let existing = list.first(where: { $0.target == target })
+        let entry = SavedServer(
+            name: name ?? existing?.name,
+            target: target,
+            email: email ?? existing?.email
+        )
+        list.removeAll { $0.target == target }
+        list.insert(entry, at: 0)
+        savedServers = Array(list.prefix(12))
+        persistServers()
+    }
+
+    func saveServer(name: String?, target: ServerTarget, replacing old: SavedServer? = nil) {
+        var list = savedServers
+        let existingEmail = old?.email ?? list.first(where: { $0.target == target })?.email
+        if let old { list.removeAll { $0.id == old.id } }
+        list.removeAll { $0.target == target }
+        let cleanName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = SavedServer(name: (cleanName?.isEmpty == false) ? cleanName : nil, target: target, email: existingEmail)
+        list.insert(entry, at: 0)
+        savedServers = Array(list.prefix(12))
+        persistServers()
+        if let old, old.target == serverTarget, !isLoggedIn {
+            serverTarget = target
+        }
+    }
+
+    func removeSavedServer(_ server: SavedServer) {
+        savedServers.removeAll { $0 == server }
+        persistServers()
+    }
+
+    /// 切换到已保存服务器;若已登录且不属于该服务器则登出。
+    func switchToServer(_ server: SavedServer) {
+        guard server.target != serverTarget else { return }
+        if isLoggedIn { logout() }
+        serverTarget = server.target
+    }
+
+    /// 当前服务器最近登录的邮箱,用于登录页预填。
+    var rememberedEmail: String? {
+        savedServers.first(where: { $0.target == serverTarget })?.email
+    }
+
+    private func persistServers() {
+        if let data = try? JSONEncoder().encode(savedServers) {
+            UserDefaults.standard.set(data, forKey: "auth.savedServers")
+        }
+    }
+
     private(set) var session: Session?
     private(set) var devices: [AccountDevice] = []
     private(set) var devicesError: String?
+    private(set) var loadingDevices = false
+    private var refreshRequest: UUID?
     private var refreshTask: Task<Void, Never>?
+    private let keychain = SessionKeychain()
+    private(set) var previews: [String: UIImage] = [:]
+
+    func rememberPreview(_ image: UIImage, deviceID: String) {
+        guard session != nil, devices.contains(where: { $0.id == deviceID }) else { return }
+        previews[deviceID] = image
+    }
 
     var isLoggedIn: Bool { session != nil }
 
@@ -51,6 +148,10 @@ final class AuthService {
             serverTarget = saved
         } else {
             serverTarget = .local
+        }
+        if let data = UserDefaults.standard.data(forKey: "auth.savedServers"),
+           let list = try? JSONDecoder().decode([SavedServer].self, from: data) {
+            savedServers = list
         }
         if Self.uiTestingMock {
             session = Session(
@@ -68,9 +169,21 @@ final class AuthService {
             }
             return
         }
-        if let data = UserDefaults.standard.data(forKey: "auth.session"),
-           let saved = try? JSONDecoder().decode(Session.self, from: data) {
-            session = saved
+        let defaults = UserDefaults.standard
+        do {
+            var data = try keychain.load()
+            if data == nil, let old = defaults.data(forKey: "auth.session") {
+                _ = try JSONDecoder().decode(Session.self, from: old)
+                try keychain.store(old)
+                data = old
+            }
+            defaults.removeObject(forKey: "auth.session")
+            if let data {
+                let saved = try JSONDecoder().decode(Session.self, from: data)
+                if saved.matches(serverTarget) { session = saved }
+            }
+        } catch {
+            devicesError = "无法读取钥匙串，请解锁设备后重试。"
         }
     }
 
@@ -90,15 +203,17 @@ final class AuthService {
         email: String,
         password: String
     ) async throws {
-        let target = serverTarget
-        let payload: [String: Any] = [
-            "server_host": target.host,
-            "use_https": target.useHTTPS,
-            "email": email,
-            "password": password,
-            "hostname": UIDevice.current.name,
-            "os": "ios",
-        ]
+        // 先探测:TLS 服务端对明文连接会直接断开,probe 内会自动升级 HTTPS 并锚定 CA
+        let requested = serverTarget
+        let probe = await probeServer(requested)
+        guard serverTarget == requested else { throw AuthError.server("服务器设置已更改，请重新登录。") }
+        serverTarget = try probe.get().target
+        let loginTarget = serverTarget
+        var payload = serverTarget.payload
+        payload["email"] = email
+        payload["password"] = password
+        payload["hostname"] = UIDevice.current.name
+        payload["os"] = "ios"
         let json = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
         let raw = await Task.detached(priority: .userInitiated) {
             Self.withRustString(json.withCString {
@@ -117,58 +232,127 @@ final class AuthService {
               let refresh = obj["refresh_token"] as? String else {
             throw AuthError.badResponse
         }
-        let displayName = (obj["user"] as? [String: Any])?["display_name"] as? String ?? ""
+        guard loginTarget == serverTarget else { throw AuthError.server("服务器设置已更改，请重新登录。") }
+        let user = obj["user"] as? [String: Any]
+        guard let userID = user?["id"] as? String else { throw AuthError.badResponse }
+        let displayName = user?["display_name"] as? String ?? ""
         let newSession = Session(
             accessToken: access,
             refreshToken: refresh,
             email: email,
             displayName: displayName,
-            serverHost: target.host,
-            useHTTPS: target.useHTTPS
+            serverHost: serverTarget.host,
+            useHTTPS: serverTarget.useHTTPS,
+            userID: userID, expiresAt: Self.expiry(in: obj),
+            mustChangePassword: user?["must_change_password"] as? Bool, apiPort: loginTarget.effectiveAPIPort
         )
-        await MainActor.run {
-            session = newSession
-            persist()
-        }
+        try keychain.store(JSONEncoder().encode(newSession))
+        previews.removeAll()
+        session = newSession
+        rememberServer(serverTarget, email: email)
+        RuntimeService.shared.sync(newSession, target: loginTarget, rebuild: true)
         await refreshDevices()
     }
 
     func logout() {
+        if !Self.uiTestingMock, let session, session.matches(serverTarget) {
+            var payload = serverTarget.payload
+            payload["access_token"] = session.accessToken
+            payload["refresh_token"] = session.refreshToken
+            if let json = RuntimeService.jsonString(payload) {
+                Task.detached(priority: .utility) { _ = RuntimeService.callSyncJSON(json, rc_auth_logout) }
+            }
+        }
+        SessionService.shared.close()
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshRequest = nil
+        loadingDevices = false
+        RuntimeService.shared.logout()
         session = nil
         devices = []
+        previews.removeAll()
+        devicesError = nil
         UserDefaults.standard.removeObject(forKey: "auth.session")
+        do { try keychain.remove() } catch { devicesError = "未能清除钥匙串，请解锁设备后重试。" }
     }
 
     // MARK: - 设备列表
 
     func refreshDevices() async {
-        if Self.uiTestingMock { return }
+        guard !Self.uiTestingMock, !loadingDevices, session != nil else { return }
+        let request = UUID()
+        refreshRequest = request
+        loadingDevices = true
+        defer { if refreshRequest == request { loadingDevices = false; refreshRequest = nil } }
+        if let session, (session.expiresAt ?? 0) < Date.now.timeIntervalSince1970 + 210 {
+            guard await refreshTokens() else { devicesError = "登录状态无法刷新，请检查网络或重新登录。"; return }
+        }
+        await loadDevices(canRefreshToken: true)
+    }
+
+    private func loadDevices(canRefreshToken: Bool) async {
         guard let session else { return }
-        let payload: [String: Any] = [
-            "server_host": session.serverHost,
-            "use_https": session.useHTTPS,
-            "access_token": session.accessToken,
-        ]
+        var payload = serverTarget.payload
+        payload["access_token"] = session.accessToken
         guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: jsonData, encoding: .utf8) else { return }
         let raw = await Task.detached(priority: .userInitiated) {
             Self.withRustString(json.withCString { rc_auth_list_devices($0) })
         }.value
-        guard let raw, let data = raw.data(using: .utf8) else { return }
+        guard self.session?.accessToken == session.accessToken else { return }
+        guard let raw, let data = raw.data(using: .utf8) else { devicesError = "服务器无响应"; return }
 
         if let arr = try? JSONDecoder().decode([AccountDevice].self, from: data) {
-            await MainActor.run {
-                devices = arr
-                devicesError = nil
-            }
+            devices = arr
+            let ids = Set(arr.map(\.id))
+            previews = previews.filter { ids.contains($0.key) }
+            devicesError = nil
         } else if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let error = obj["error"] as? String {
-            await MainActor.run { devicesError = error }
-        }
+            if canRefreshToken, error.contains("token_expired"), await refreshTokens() {
+                await loadDevices(canRefreshToken: false)
+            } else if self.session?.accessToken == session.accessToken {
+                devicesError = error
+            }
+        } else { devicesError = "设备列表格式错误" }
+    }
+
+    /// 用 refresh token 轮换访问令牌,成功返回 true 并持久化新会话。
+    @discardableResult
+    func refreshTokens() async -> Bool {
+        guard let session else { return false }
+        var payload = serverTarget.payload
+        payload["refresh_token"] = session.refreshToken
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: jsonData, encoding: .utf8) else { return false }
+        let raw = await Task.detached(priority: .userInitiated) {
+            Self.withRustString(json.withCString { rc_auth_refresh($0) })
+        }.value
+        guard let raw, let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let access = obj["access_token"] as? String,
+              let refresh = obj["refresh_token"] as? String else { return false }
+        guard self.session?.refreshToken == session.refreshToken else { return false }
+        var updated = session
+        updated.accessToken = access
+        updated.refreshToken = refresh
+        updated.expiresAt = Self.expiry(in: obj)
+        let user = obj["user"] as? [String: Any]
+        updated.userID = user?["id"] as? String ?? updated.userID
+        updated.mustChangePassword = user?["must_change_password"] as? Bool ?? updated.mustChangePassword
+        do { try keychain.store(JSONEncoder().encode(updated)) } catch { return false }
+        self.session = updated
+        RuntimeService.shared.sync(updated, target: serverTarget)
+        return true
+    }
+
+    private static func expiry(in response: [String: Any]) -> TimeInterval {
+        Date.now.timeIntervalSince1970 + ((response["expires_in_sec"] as? NSNumber)?.doubleValue ?? 0)
     }
 
     func startAutoRefresh() {
-        guard refreshTask == nil else { return }
+        guard !Self.uiTestingMock, isLoggedIn, refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshDevices()
@@ -178,12 +362,6 @@ final class AuthService {
     }
 
     // MARK: - 内部
-
-    private func persist() {
-        if let session, let data = try? JSONEncoder().encode(session) {
-            UserDefaults.standard.set(data, forKey: "auth.session")
-        }
-    }
 
     nonisolated private static func withRustString(_ ptr: UnsafeMutablePointer<CChar>?) -> String? {
         guard let ptr else { return nil }
@@ -211,10 +389,6 @@ final class AuthService {
         }.value
     }
 
-    private func serverPayload() -> [String: Any] {
-        ["server_host": serverTarget.host, "use_https": serverTarget.useHTTPS]
-    }
-
     private static func errorMessage(in raw: String?) -> String? {
         guard let raw, let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -223,21 +397,40 @@ final class AuthService {
     }
 
     /// 探测服务器连通性,返回耗时毫秒或错误。
-    func probeServer() async -> Result<Int, AuthError> {
-        let raw = await callFFI("probe", serverPayload())
+    /// 明文探测失败时自动升级 HTTPS 重试(TLS 服务端会直接断开明文连接)。
+    func probeServer(_ candidate: ServerTarget) async -> Result<(target: ServerTarget, latency: Int), AuthError> {
+        var target = candidate
+        var raw = await callFFI("probe", target.payload)
+        if Self.errorMessage(in: raw) != nil, !target.useHTTPS {
+            var upgraded = target
+            upgraded.useHTTPS = true
+            let retry = await callFFI("probe", upgraded.payload)
+            if retry != nil, Self.errorMessage(in: retry) == nil {
+                target = upgraded
+                raw = retry
+            }
+        }
         if let error = Self.errorMessage(in: raw) { return .failure(.server(error)) }
         guard let raw, let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let latency = obj["latency_ms"] as? Int else {
             return .failure(.noResponse)
         }
-        return .success(latency)
+        // TOFU:抓取服务端 CA 供后续 HTTPS/信令 TLS 校验
+        if let bundle = obj["ca_bundle"] as? [String: Any],
+           let pem = bundle["ca_cert_pem"] as? String {
+            if let known = candidate.caCertPem, known != pem {
+                return .failure(.server("服务器 CA 已更换，未继续登录。请先核实新证书。"))
+            }
+            target.caCertPem = pem
+        }
+        return .success((target, latency))
     }
 
     /// 修改密码;成功后用新令牌更新会话。
     func changePassword(current: String, new: String) async throws {
         guard let session else { throw AuthError.notLoggedIn }
-        var payload = serverPayload()
+        var payload = serverTarget.payload
         payload["access_token"] = session.accessToken
         payload["current_password"] = current
         payload["new_password"] = new
@@ -252,18 +445,23 @@ final class AuthService {
         var updated = session
         updated.accessToken = access
         updated.refreshToken = refresh
+        updated.expiresAt = Self.expiry(in: obj)
+        updated.mustChangePassword = false
+        guard self.session?.refreshToken == session.refreshToken else { throw AuthError.notLoggedIn }
+        try keychain.store(JSONEncoder().encode(updated))
         self.session = updated
-        persist()
+        RuntimeService.shared.sync(updated, target: serverTarget)
     }
 
     /// 重命名设备别名。
     func renameDevice(deviceID: String, alias: String) async throws {
         guard let session else { throw AuthError.notLoggedIn }
-        var payload = serverPayload()
+        var payload = serverTarget.payload
         payload["access_token"] = session.accessToken
         payload["device_id"] = deviceID
         payload["alias"] = alias
         let raw = await callFFI("rename", payload)
+        guard let raw else { throw AuthError.noResponse }
         if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
         await refreshDevices()
     }
@@ -271,17 +469,18 @@ final class AuthService {
     /// 解绑并移除设备。
     func removeDevice(deviceID: String) async throws {
         guard let session else { throw AuthError.notLoggedIn }
-        var payload = serverPayload()
+        var payload = serverTarget.payload
         payload["access_token"] = session.accessToken
         payload["device_id"] = deviceID
         let raw = await callFFI("remove", payload)
+        guard let raw else { throw AuthError.noResponse }
         if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
         await refreshDevices()
     }
 
     enum AuthError: LocalizedError {
         case notLoggedIn
-    case noResponse
+        case noResponse
         case badResponse
         case server(String)
 

@@ -1,4 +1,5 @@
 module RabbitControlCore {
     header "rabbitcontrol_core.h"
+    header "RCMetalRenderer.h"
     export *
 }

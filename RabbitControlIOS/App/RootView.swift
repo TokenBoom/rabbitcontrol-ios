@@ -1,98 +1,70 @@
 import SwiftUI
 
-/// 全局界面状态:推入二级页面时隐藏悬浮 tab 条,避免遮挡内容。
-@Observable
-final class AppChrome {
-    static let shared = AppChrome()
-    var tabBarHidden = false
-}
-
-/// 应用根视图:三个主 tab(我的设备 / 远程协助 / 我的) + 底部悬浮胶囊 tab 条。
 struct RootView: View {
-    enum Tab: Int {
-        case devices
-        case assist
-        case profile
-    }
-
+    enum Tab { case devices, assist, profile }
+    @State private var assistFlow = AssistFlow.shared
+    @State private var inputPrefs = InteractionPrefs.shared
     @State private var selection: Tab = .devices
+    private var auth: AuthService { .shared }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Group {
-                switch selection {
-                case .devices:
-                    NavigationStack {
-                        DeviceListView()
-                    }
-                case .assist:
-                    NavigationStack {
-                        AssistView()
-                    }
-                case .profile:
-                    NavigationStack {
-                        ProfileView()
+        Group {
+            if auth.isLoggedIn { home } else { LoginView() }
+        }
+        .preferredColorScheme(inputPrefs.themeMode.colorScheme)
+        .overlay { ToastOverlay(center: .shared).allowsHitTesting(false).animation(.easeInOut(duration: 0.2), value: ToastCenter.shared.message) }
+        .onChange(of: auth.isLoggedIn) {
+            if !auth.isLoggedIn { selection = .devices }
+        }
+    }
+
+    /// 登录后的主页;未登录时与 Android 一致,只显示登录/注册。
+    private var home: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Group {
+                    switch selection {
+                    case .devices: DeviceListView()
+                    case .assist: AssistView(embeddedInTab: true)
+                    case .profile: ProfileView()
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                if auth.isLoggedIn, !AssistFlow.shared.sessionActive {
+                    HStack(spacing: 4) {
+                        homeAction("设备", id: "我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
+                        homeAction("协助", id: "远程协助", icon: .remoteAssist, selected: selection == .assist) { selection = .assist }
+                        homeAction("我的", id: "我的", icon: .person, selected: selection == .profile) { selection = .profile }
+                    }
+                    .padding(4)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+                    .frame(maxWidth: 256)
+                    .padding(.top, 4)
+                    .padding(.bottom, 2)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if !AppChrome.shared.tabBarHidden {
-                FloatingTabBar(selection: $selection)
-                    .padding(.horizontal, 48)
-                    .padding(.bottom, 20)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-
-            ToastOverlay(center: ToastCenter.shared)
+            .background(RCColor.bgPage.ignoresSafeArea())
         }
-        .animation(.easeInOut(duration: 0.15), value: ToastCenter.shared.message)
-        .animation(.easeInOut(duration: 0.2), value: AppChrome.shared.tabBarHidden)
-    }
-}
-
-/// 底部悬浮胶囊 tab 条(移动端适配,iOS 原生 SF Symbols 对应设计规范 §3.5 的 Lucide 图标语义)。
-struct FloatingTabBar: View {
-    @Binding var selection: RootView.Tab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            tabItem(.devices, title: "我的设备", systemImage: "laptopcomputer.and.iphone")
-            tabItem(.assist, title: "远程协助", systemImage: "rectangle.2.swap")
-            tabItem(.profile, title: "我的", systemImage: "person")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay {
-            Capsule().strokeBorder(RCColor.stroke, lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
     }
 
-    private func tabItem(_ tab: RootView.Tab, title: String, systemImage: String) -> some View {
-        let selected = selection == tab
-        return Button {
-            selection = tab
-        } label: {
+    private func homeAction(_ title: String, id: String, icon: RabbitIcon.Name, selected: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 20))
-                Text(title)
-                    .font(.system(size: 12))
+                RabbitIcon(icon, size: 20)
+                Text(title).font(.system(size: 11, weight: selected ? .semibold : .regular))
             }
+            .frame(maxWidth: .infinity, minHeight: 40)
             .foregroundStyle(selected ? RCColor.accent : RCColor.textSecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 4)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: 999)
-                        .fill(RCColor.accent.opacity(0.12))
-                }
-            }
+            .background(selected ? RCColor.accent.opacity(0.12) : .clear, in: Capsule())
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("tab.\(title)")
+        .accessibilityLabel(id)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("tab.\(id)")
     }
 }
