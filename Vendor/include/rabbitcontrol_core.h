@@ -56,6 +56,26 @@ char *rc_auth_remove_device(const char *json);
 /// 账号设备列表:{server..., "access_token"};返回 MyDeviceInfo 数组 JSON。
 char *rc_auth_list_devices(const char *json);
 
+// ── 远控会话(非阻塞;open 后立即返回,进度经 poll 推送)──
+
+/// 打开会话(直连模式):{"connect_addr":"ip:port","password"?,"watch_only"?,"width"?,"height"?,"fps"?,"bitrate_bps"?}
+/// 返回 {"session_id": N} 或错误信封。
+char *rc_session_open(const char *json);
+
+/// 排空状态更新:{"session_id": N} → {"updates":[...SessionUpdate...], "running": bool}
+char *rc_session_poll(const char *json);
+
+/// 低频指令:{"session_id": N, "command": {"type":"disconnect"|"set_bitrate"|"stage_rect"|"set_clipboard_enabled"|"set_audio_muted"|"set_stream_params"|"lock_remote_screen", ...}}
+char *rc_session_command(const char *json);
+
+/// 输入事件:{"session_id": N, "kind":"mouse_move|mouse_button|mouse_wheel|key", ...}
+/// mouse_move: x,y 归一化 0..65535;mouse_button: button left/right/middle, pressed;
+/// mouse_wheel: delta, horizontal;key: scancode, pressed, modifiers
+char *rc_session_input(const char *json);
+
+/// 关闭会话:{"session_id": N}
+char *rc_session_close(const char *json);
+
 #ifdef __cplusplus
 }
 #endif
