@@ -7,6 +7,22 @@ struct AssistView: View {
     @State private var allowAssist = true
     @State private var codeVisible = true
     @State private var verifyMode = MockData.verifyModes[0]
+    @State private var directTarget: DirectTarget?
+
+    /// 直连目标:输入为 ip:port 时触发真实直连会话。
+    struct DirectTarget: Identifiable, Hashable {
+        let addr: String
+        var id: String { addr }
+    }
+
+    /// 输入是否为直连地址(含端口,如 192.168.1.10:9901 或 127.0.0.1:9901)。
+    private var parsedDirectAddr: String? {
+        let trimmed = partnerID.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains(":"),
+              let portStr = trimmed.split(separator: ":").last,
+              Int(portStr) != nil else { return nil }
+        return trimmed
+    }
 
     var body: some View {
         ScrollView {
@@ -25,6 +41,20 @@ struct AssistView: View {
         }
         .background(RCColor.bgPage)
         .navigationBarHidden(true)
+        .navigationDestination(item: $directTarget) { target in
+            SessionView(
+                device: Device(
+                    id: "direct-\(target.addr)",
+                    name: target.addr,
+                    kind: .mac,
+                    online: true,
+                    isLocal: true,
+                    wallpaper: .coast
+                ),
+                mode: .control,
+                directAddr: target.addr
+            )
+        }
     }
 
     // MARK: - 远控伙伴设备
@@ -42,8 +72,10 @@ struct AssistView: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(RCColor.textPrimary)
 
-            TextField("请输入设备 ID", text: $partnerID)
-                .keyboardType(.numberPad)
+            TextField("设备 ID 或直连地址 ip:port", text: $partnerID)
+                .keyboardType(.numbersAndPunctuation)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
                 .font(.system(size: 15))
                 .padding(.horizontal, 14)
                 .frame(height: 52)
@@ -55,7 +87,11 @@ struct AssistView: View {
                 .accessibilityIdentifier("assist.partnerID")
 
             Button {
-                ToastCenter.shared.show("功能开发中")
+                if let addr = parsedDirectAddr {
+                    directTarget = DirectTarget(addr: addr)
+                } else {
+                    ToastCenter.shared.show("设备 ID 连接需要信令服务,即将支持;直连请输入 ip:port")
+                }
             } label: {
                 Text("开始远控")
                     .font(.system(size: 16, weight: .semibold))

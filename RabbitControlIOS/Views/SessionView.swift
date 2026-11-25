@@ -5,6 +5,8 @@ import SwiftUI
 struct SessionView: View {
     var device: Device
     var mode: DeviceDetailView.SessionMode
+    /// 显式直连地址(ip:port);非空时优先于 LAN 匹配。
+    var directAddr: String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var startedAt = Date.now
@@ -17,9 +19,13 @@ struct SessionView: View {
     private var watchMode: Bool { mode == .watch }
 
     /// 是否启用真实会话链路(UI 测试注入 mock 时禁用)。
+    private var resolvedAddr: String? {
+        if let directAddr { return directAddr }
+        return LANDiscoveryService.shared.directAddr(forDeviceID: device.id)
+    }
+
     private var useRealSession: Bool {
-        !AuthService.uiTestingMock
-            && LANDiscoveryService.shared.directAddr(forDeviceID: device.id) != nil
+        !AuthService.uiTestingMock && resolvedAddr != nil
     }
 
     var body: some View {
@@ -90,7 +96,7 @@ struct SessionView: View {
         .statusBarHidden(true)
         .onAppear {
             guard useRealSession, !session.isActive else { return }
-            if let addr = LANDiscoveryService.shared.directAddr(forDeviceID: device.id) {
+            if let addr = resolvedAddr {
                 session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
             }
         }
