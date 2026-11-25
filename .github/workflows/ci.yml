@@ -35,7 +35,7 @@ jobs:
           echo "$(dirname "$(find "$RUNNER_TEMP/xcodegen" -type f -path '*/bin/xcodegen')")" >> "$GITHUB_PATH"
       - name: Download prebuilt xcframework
         env:
-          XCF_TAG: "v0.1.6"
+          XCF_TAG: "v0.1.8"
         run: |
           # 预编译产物由 rabbitcontrol-apple-media 的 Release xcframework 工作流发布;
           # 升级时同步修改 XCF_TAG(对应 media 仓的 release tag)。
