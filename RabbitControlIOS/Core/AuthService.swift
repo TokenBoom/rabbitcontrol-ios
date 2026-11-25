@@ -98,7 +98,7 @@ final class AuthService {
     /// 登录成功后把同一凭据喂给 runtime 会话体系(信令/免密连接依赖它)。
     private func bridgeRuntimeLogin(email: String, password: String) {
         Task.detached {
-            RuntimeService.shared.login(email: email, password: password)
+            await RuntimeService.shared.login(email: email, password: password)
         }
     }
 

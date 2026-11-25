@@ -54,7 +54,9 @@ final class RuntimeService {
     /// App 启动时:runtime 会话若已从磁盘恢复则直接拉信令。
     func restoreAndStartSignal() {
         guard initialized, !signalRunning else { return }
-        if let resp = Self.callSyncJSON("{}", rc_runtime_status),
+        if let s = Self.callSync({ rc_runtime_status() }),
+           let data = s.data(using: .utf8),
+           let resp = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            resp["logged_in"] as? Bool == true {
             startSignal()
         }
@@ -62,7 +64,7 @@ final class RuntimeService {
 
     func logout() {
         stopSignal()
-        _ = Self.callSyncJSON("{}", rc_runtime_logout)
+        _ = Self.callSync({ rc_runtime_logout() })
     }
 
     func startSignal() {
