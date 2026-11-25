@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 远控会话界面(S1 移动端适配):深色画面占位区 + 顶部会话工具栏 + 控制中心菜单 + HUD。
-/// 画面接入将在后续版本桥接视频层(设计规范 §8.5),本期为静态 mock。
+/// 远控会话界面(S1 移动端适配):真实会话画面(VT 解码)+ 顶部会话工具栏 + HUD。
+/// LAN 直连可用时自动建连;UI 测试或无直连地址时退回 mock 占位。
 struct SessionView: View {
     var device: Device
     var mode: DeviceDetailView.SessionMode
@@ -12,17 +12,41 @@ struct SessionView: View {
     @State private var quality = "超清 14M"
     @State private var frameRate = "144 帧"
     @State private var showSecurity = false
+    @State private var session = SessionService()
 
     private var watchMode: Bool { mode == .watch }
 
+    /// 是否启用真实会话链路(UI 测试注入 mock 时禁用)。
+    private var useRealSession: Bool {
+        !AuthService.uiTestingMock
+            && LANDiscoveryService.shared.directAddr(forDeviceID: device.id) != nil
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
-            // 画面区(占位)
+            // 画面区:真实会话或占位
             RCColor.stageBg.ignoresSafeArea()
-            Text("画面接入将在后续版本桥接视频层")
-                .font(.system(size: 13))
-                .foregroundStyle(RCColor.textSecondary)
+            if session.isActive {
+                RemoteVideoView(session: session)
+                    .ignoresSafeArea()
+            } else {
+                VStack(spacing: 10) {
+                    if useRealSession, case .ended(let reason) = session.state {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(RCColor.warning)
+                        Text(reason)
+                            .font(.system(size: 13))
+                            .foregroundStyle(RCColor.textSecondary)
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                        Text(useRealSession ? session.state.displayText : "画面接入将在后续版本桥接视频层")
+                            .font(.system(size: 13))
+                            .foregroundStyle(RCColor.textSecondary)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             if watchMode {
                 Text("观看模式")
@@ -64,6 +88,15 @@ struct SessionView: View {
             .accessibilityIdentifier("session.toggleHUD")
         }
         .statusBarHidden(true)
+        .onAppear {
+            guard useRealSession, !session.isActive else { return }
+            if let addr = LANDiscoveryService.shared.directAddr(forDeviceID: device.id) {
+                session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
+            }
+        }
+        .onDisappear {
+            session.close()
+        }
         .sheet(isPresented: $showSecurity) {
             SecurityStatusView()
                 .presentationDetents([.medium])

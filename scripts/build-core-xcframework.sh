@@ -40,11 +40,28 @@ fi
 
 echo "==> core 检出: $CORE_DIR"
 
+# Apple 媒体库(VT 解码+帧泵渲染),独立仓库,可选但必须用于真机视频
+MEDIA_DIR="${RC_MEDIA_DIR:-$IOS_REPO/../rabbitcontrol-apple-media}"
+MEDIA_CRATE=rc-media-apple
+media_lib_name="lib${MEDIA_CRATE//-/_}.a"
+
 libs=()
 for target in $TARGETS; do
     echo "==> cargo build --release -p $CRATE --target $target"
     (cd "$CORE_DIR" && cargo build --release -p "$CRATE" --target "$target")
-    libs+=("$CORE_DIR/target/$target/release/lib${CRATE//-/_}.a")
+    core_lib="$CORE_DIR/target/$target/release/lib${CRATE//-/_}.a"
+
+    if [[ -f "$MEDIA_DIR/crates/rc-media-apple/Cargo.toml" ]]; then
+        echo "==> cargo build --release -p $MEDIA_CRATE --target $target"
+        (cd "$MEDIA_DIR" && cargo build --release -p "$MEDIA_CRATE" --target "$target")
+        # 合并两个静态库为单一 archive,保持 Xcode 侧单 xcframework 链接
+        merged="$(dirname "$core_lib")/librabbitcontrol_combined.a"
+        libtool -static -o "$merged" "$core_lib" "$MEDIA_DIR/target/$target/release/$media_lib_name"
+        libs+=("$merged")
+    else
+        echo "warning: 未找到 rabbitcontrol-apple-media($MEDIA_DIR),视频通路不可用" >&2
+        libs+=("$core_lib")
+    fi
 done
 
 rm -rf "$XCFW_DIR"

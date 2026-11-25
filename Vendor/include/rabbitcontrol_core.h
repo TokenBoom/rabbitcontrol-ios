@@ -78,16 +78,17 @@ char *rc_session_close(const char *json);
 
 // ── 视频通路 ──
 
-/// 注册 iOS 媒体通路(VT 解码器+帧泵渲染器),幂等,返回 1 成功。
-/// rc_session_open 内部会自动调用,通常无需手动调。
-int rc_video_init(void);
+/// 注册 Apple 媒体通路(VT 解码器+帧泵渲染器),幂等,返回 1 成功。
+/// App 启动时调用一次;来自 rabbitcontrol-apple-media 仓(合并进本 xcframework)。
+int rc_apple_media_init(void);
 
 /// 取走最新帧(所有权转移):{"ptr": u64, "width", "height", "seq"},无帧返回 {}。
-/// ptr 即 CVPixelBufferRef;用毕必须调 rc_video_frame_release。
-char *rc_video_frame_take(void);
+/// ptr 即 CVPixelBufferRef;用毕必须调 rc_apple_media_frame_release。
+/// 返回字符串用毕调 rc_string_free 释放(同一分配器)。
+char *rc_apple_media_frame_take(void);
 
-/// 释放帧(仅限 rc_video_frame_take 取走的 ptr,每帧一次)。
-void rc_video_frame_release(unsigned long long ptr);
+/// 释放帧(仅限 rc_apple_media_frame_take 取走的 ptr,每帧一次)。
+void rc_apple_media_frame_release(unsigned long long ptr);
 
 #ifdef __cplusplus
 }

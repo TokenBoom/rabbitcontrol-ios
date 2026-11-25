@@ -7,6 +7,15 @@ import UIKit
 /// 轮询间隔 2s,与信标广播周期(1s)和 TTL 匹配,发现延迟可接受且几乎零功耗。
 @Observable
 final class LANDiscoveryService {
+    /// 按设备 ID(原始或去空格格式化)查 LAN 直连地址。
+    func directAddr(forDeviceID deviceID: String) -> String? {
+        let compact = deviceID.replacingOccurrences(of: " ", with: "")
+        return peers.first { peer in
+            guard let id = peer.deviceID else { return false }
+            return id == deviceID || id.replacingOccurrences(of: " ", with: "") == compact
+        }?.addr
+    }
+
     static let shared = LANDiscoveryService()
 
     private(set) var peers: [LANPeer] = []

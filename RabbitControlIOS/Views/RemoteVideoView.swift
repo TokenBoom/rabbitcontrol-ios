@@ -12,7 +12,7 @@ final class VideoFrameRenderer {
 
     /// 尝试取新帧并渲染为 CGImage;无新帧返回 nil。调用线程不限。
     func renderLatest() -> CGImage? {
-        guard let rawPtr = rc_video_frame_take() else { return nil }
+        guard let rawPtr = rc_apple_media_frame_take() else { return nil }
         defer { rc_string_free(rawPtr) }
         let json = String(cString: rawPtr)
         guard let data = json.data(using: .utf8),
@@ -22,14 +22,14 @@ final class VideoFrameRenderer {
               let height = obj["height"] as? Int,
               let seq = obj["seq"] as? UInt64 else { return nil }
         guard seq != lastSeq else {
-            rc_video_frame_release(ptr)
+            rc_apple_media_frame_release(ptr)
             return nil
         }
         lastSeq = seq
         let pixelBuffer = Unmanaged<CVPixelBuffer>.fromOpaque(
             UnsafeRawPointer(bitPattern: UInt(ptr))!
         ).takeUnretainedValue()
-        defer { rc_video_frame_release(ptr) }
+        defer { rc_apple_media_frame_release(ptr) }
         let image = CIImage(cvPixelBuffer: pixelBuffer)
         return ciContext.createCGImage(
             image,
