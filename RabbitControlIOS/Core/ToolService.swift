@@ -15,6 +15,7 @@ final class ToolService {
     // ── 文件 ──
     private(set) var currentPath = "/"
     private(set) var fileEntries: [RemoteFileEntry] = []
+    private(set) var listing = false
     private(set) var fileError: String?
     private(set) var transfers: [TransferItem] = []
 
@@ -22,7 +23,10 @@ final class ToolService {
     private(set) var portmapRules: [PortmapRule] = []
 
     private(set) var lastError: String?
+    private var owner: UInt64?
     private var pollTask: Task<Void, Never>?
+    private var listingTimeout: Task<Void, Never>?
+    private var listingRequest = UUID()
 
     private init() {}
 
@@ -39,7 +43,7 @@ final class ToolService {
         let totalBytes: UInt64
         let doneBytes: UInt64
         let error: String?
-        var finished: Bool { error != nil || (totalBytes > 0 && doneBytes >= totalBytes) }
+        let status: String
     }
 
     struct PortmapRule: Identifiable, Hashable {
@@ -49,17 +53,26 @@ final class ToolService {
         let targetAddr: String
         let targetPort: UInt16
         let enabled: Bool
+        let error: String?
     }
 
     // MARK: - 生命周期
 
     /// 开始收割事件。sessionID 取自 SessionService 活动会话。
     func start(sessionID: UInt64) {
+        guard Self.canControl(sessionID) else { return }
+        if owner != sessionID {
+            stop()
+            owner = sessionID
+            transfers = []; fileEntries = []; portmapRules = []; currentPath = "/"
+            fileError = nil; termID = nil; terminalOutput = ""; lastError = nil
+        }
         guard pollTask == nil else { return }
         pollTask = Task.detached {
             while !Task.isCancelled {
                 guard let resp = Self.poll(sessionID: sessionID) else { break }
                 await MainActor.run { [weak self] in
+                    guard !Task.isCancelled, self?.owner == sessionID else { return }
                     self?.applyPoll(resp)
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)
@@ -70,11 +83,15 @@ final class ToolService {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        listingTimeout?.cancel()
+        listingRequest = UUID()
+        listing = false
     }
 
     // MARK: - 终端操作
 
     func terminalOpen(sessionID: UInt64, cols: UInt16 = 80, rows: UInt16 = 24) {
+        lastError = nil
         terminalOutput = ""
         terminalExited = false
         if let resp = Self.call(sessionID: sessionID, ["op": "terminal_open", "cols": cols, "rows": rows]),
@@ -85,9 +102,9 @@ final class ToolService {
         }
     }
 
-    func terminalInput(sessionID: UInt64, text: String) {
-        guard let termID else { return }
-        _ = Self.call(sessionID: sessionID, ["op": "terminal_input", "term_id": termID, "text": text])
+    @discardableResult func terminalInput(sessionID: UInt64, text: String) -> Bool {
+        guard let termID else { return false }
+        return Self.call(sessionID: sessionID, ["op": "terminal_input", "term_id": termID, "text": text])?["ok"] as? Bool == true
     }
 
     func terminalClose(sessionID: UInt64) {
@@ -99,42 +116,88 @@ final class ToolService {
     // MARK: - 文件操作
 
     func fileList(sessionID: UInt64, path: String?) {
+        guard owner == sessionID, Self.canControl(sessionID) else {
+            fileError = "当前会话不允许远程工具操作"
+            return
+        }
+        listingTimeout?.cancel()
+        let request = UUID()
+        listingRequest = request
         var op: [String: Any] = ["op": "file_list_remote"]
         op["path"] = path ?? NSNull()
-        _ = Self.call(sessionID: sessionID, op)
+        fileEntries = []
+        guard let payload = Self.payload(op) else { listing = false; fileError = "目录路径无效"; return }
+        listing = true
+        fileError = nil
+        Task { [weak self] in
+            let error: String? = await Task.detached(priority: .medium) {
+                let result = Self.callFFI(sessionID: sessionID, payload)
+                return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "目录读取失败")
+            }.value
+            guard let self, let error, owner == sessionID, listingRequest == request, listing else { return }
+            listingTimeout?.cancel()
+            listing = false
+            fileError = error
+        }
+        listingTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled, let self, owner == sessionID, listingRequest == request, listing else { return }
+            listing = false
+            fileError = "对方未返回目录。请重试，或确认对方已开启文件服务。"
+        }
     }
 
-    func fileMkdir(sessionID: UInt64, parent: String, name: String) {
-        _ = Self.call(sessionID: sessionID, ["op": "file_mkdir", "parent": parent, "name": name])
+    @discardableResult func fileMkdir(sessionID: UInt64, parent: String, name: String) -> String? {
+        let result = Self.call(sessionID: sessionID, ["op": "file_mkdir", "parent": parent, "name": name])
+        return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "无法新建文件夹")
     }
 
-    func fileDownload(sessionID: UInt64, remotePath: String) -> UInt64? {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        guard let dir = docs?.path else { return nil }
-        let resp = Self.call(sessionID: sessionID, ["op": "file_download", "remote_path": remotePath, "local_dir": dir])
-        return (resp?["transfer_id"] as? NSNumber)?.uint64Value
+    @discardableResult func fileCancel(sessionID: UInt64, transferID: UInt64) -> String? {
+        let result = Self.call(sessionID: sessionID, ["op": "file_cancel", "id": transferID])
+        return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "无法取消传输")
     }
 
-    func fileUpload(sessionID: UInt64, localPath: String, remoteDir: String) -> UInt64? {
-        let resp = Self.call(sessionID: sessionID, ["op": "file_upload", "local_path": localPath, "remote_dir": remoteDir])
-        return (resp?["transfer_id"] as? NSNumber)?.uint64Value
+    @discardableResult func fileClearFinished(sessionID: UInt64) -> String? {
+        let result = Self.call(sessionID: sessionID, ["op": "file_clear_finished"])
+        return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "无法清除已完成传输")
+    }
+
+    func fileDownload(sessionID: UInt64, remotePath: String) async -> UInt64? {
+        await startTransfer(sessionID: sessionID, ["op": "file_download", "remote_path": remotePath,
+                                                  "local_dir": URL.documentsDirectory.path])
+    }
+
+    func fileUpload(sessionID: UInt64, localPath: String, remoteDir: String) async -> UInt64? {
+        await startTransfer(sessionID: sessionID, ["op": "file_upload", "local_path": localPath,
+                                                  "remote_dir": remoteDir])
+    }
+
+    private func startTransfer(sessionID: UInt64, _ op: [String: Any]) async -> UInt64? {
+        guard Self.canControl(sessionID), let payload = Self.payload(op) else { return nil }
+        return await Task.detached(priority: .medium) {
+            let result = Self.callFFI(sessionID: sessionID, payload)
+            return (result?["transfer_id"] as? NSNumber)?.uint64Value
+        }.value
     }
 
     // MARK: - 端口映射操作
 
-    func portmapAdd(sessionID: UInt64, name: String, localPort: UInt16, remoteHost: String, remotePort: UInt16) {
-        _ = Self.call(sessionID: sessionID, [
+    func portmapAdd(sessionID: UInt64, name: String, localPort: UInt16, remoteHost: String, remotePort: UInt16) -> String? {
+        let result = Self.call(sessionID: sessionID, [
             "op": "portmap_add", "name": name, "local_port": localPort,
             "remote_host": remoteHost, "remote_port": remotePort, "enabled": true,
         ])
+        return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "无法添加映射")
     }
 
-    func portmapToggle(sessionID: UInt64, ruleID: UInt64, enabled: Bool) {
-        _ = Self.call(sessionID: sessionID, ["op": "portmap_toggle", "rule_id": ruleID, "enabled": enabled])
+    @discardableResult func portmapToggle(sessionID: UInt64, ruleID: UInt64, enabled: Bool) -> String? {
+        let result = Self.call(sessionID: sessionID, ["op": "portmap_toggle", "rule_id": ruleID, "enabled": enabled])
+        return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "未能切换映射状态")
     }
 
-    func portmapRemove(sessionID: UInt64, ruleID: UInt64) {
-        _ = Self.call(sessionID: sessionID, ["op": "portmap_remove", "rule_id": ruleID])
+    @discardableResult func portmapRemove(sessionID: UInt64, ruleID: UInt64) -> String? {
+        let result = Self.call(sessionID: sessionID, ["op": "portmap_remove", "rule_id": ruleID])
+        return result?["ok"] as? Bool == true ? nil : (result?["error"] as? String ?? "未能移除映射")
     }
 
     // MARK: - 事件应用
@@ -145,6 +208,7 @@ final class ToolService {
                 guard let type = ev["type"] as? String else { continue }
                 switch type {
                 case "output":
+                    guard let termID, (ev["termId"] as? NSNumber)?.uint32Value == termID else { continue }
                     if let text = ev["textUtf8Lossy"] as? String {
                         terminalOutput += text
                         // 移动端内存保护:保留尾部 200k 字符
@@ -153,7 +217,7 @@ final class ToolService {
                         }
                     }
                 case "exited":
-                    terminalExited = true
+                    if let termID, (ev["termId"] as? NSNumber)?.uint32Value == termID { terminalExited = true }
                 default:
                     break
                 }
@@ -163,6 +227,8 @@ final class ToolService {
             for ev in events {
                 guard let type = ev["type"] as? String else { continue }
                 if type == "remoteDir" {
+                    listingTimeout?.cancel()
+                    listing = false
                     currentPath = ev["path"] as? String ?? currentPath
                     fileError = ev["error"] as? String
                     let raw = ev["entries"] as? [[String: Any]] ?? []
@@ -174,8 +240,13 @@ final class ToolService {
                             size: (e["size"] as? NSNumber)?.uint64Value ?? 0
                         )
                     }
-                } else if type == "transferUpdated", let item = ev as? [String: Any] {
-                    _ = item // 传输项结构嵌套,由 file_list_transfers 轮询覆盖;此略
+                } else if type == "transferUpdated", let id = (ev["id"] as? NSNumber)?.uint64Value,
+                          let name = ev["name"] as? String, let status = ev["status"] as? String {
+                    let item = TransferItem(id: id, fileName: name, totalBytes: (ev["totalBytes"] as? NSNumber)?.uint64Value ?? 0,
+                                            doneBytes: (ev["doneBytes"] as? NSNumber)?.uint64Value ?? 0,
+                                            error: ev["error"] as? String, status: status)
+                    if let index = transfers.firstIndex(where: { $0.id == id }) { transfers[index] = item }
+                    else { transfers.insert(item, at: 0) }
                 }
             }
         }
@@ -185,10 +256,11 @@ final class ToolService {
                 return PortmapRule(
                     id: id,
                     name: r["name"] as? String ?? "",
-                    localPort: (r["local_port"] as? NSNumber)?.uint16Value ?? 0,
-                    targetAddr: r["target_addr"] as? String ?? "",
-                    targetPort: (r["target_port"] as? NSNumber)?.uint16Value ?? 0,
-                    enabled: r["enabled"] as? Bool ?? false
+                    localPort: (r["localPort"] as? NSNumber)?.uint16Value ?? 0,
+                    targetAddr: r["targetAddr"] as? String ?? "",
+                    targetPort: (r["targetPort"] as? NSNumber)?.uint16Value ?? 0,
+                    enabled: r["enabled"] as? Bool ?? false,
+                    error: r["error"] as? String
                 )
             }
         }
@@ -196,9 +268,22 @@ final class ToolService {
 
     // MARK: - FFI 辅助
 
-    nonisolated private static func call(sessionID: UInt64, _ op: [String: Any]) -> [String: Any]? {
-        guard let data = try? JSONSerialization.data(withJSONObject: op),
-              let payload = String(data: data, encoding: .utf8) else { return nil }
+    private static func canControl(_ id: UInt64) -> Bool {
+        let session = SessionService.shared
+        return session.sessionID == id && session.isConnected && !session.peerWatchOnly
+    }
+
+    private static func call(sessionID: UInt64, _ op: [String: Any]) -> [String: Any]? {
+        guard canControl(sessionID) else { return ["error": "当前会话不允许远程工具操作"] }
+        guard let payload = payload(op) else { return nil }
+        return callFFI(sessionID: sessionID, payload)
+    }
+
+    private static func payload(_ op: [String: Any]) -> String? {
+        (try? JSONSerialization.data(withJSONObject: op)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    nonisolated private static func callFFI(sessionID: UInt64, _ payload: String) -> [String: Any]? {
         return payload.withCString { cstr in
             guard let ptr = rc_tools_call(sessionID, cstr) else { return nil }
             defer { rc_string_free(ptr) }

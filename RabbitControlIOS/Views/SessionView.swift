@@ -1,224 +1,127 @@
 import SwiftUI
 
-/// 远控会话界面(S1 移动端适配):真实会话画面(VT 解码)+ 顶部会话工具栏 + HUD。
-/// LAN 直连可用时自动建连;UI 测试或无直连地址时退回 mock 占位。
 struct SessionView: View {
     var device: Device
     var mode: DeviceDetailView.SessionMode
-    /// 显式直连地址(ip:port);非空时优先于 LAN 匹配。
     var directAddr: String?
+    var connectionPassword = ""
 
     @Environment(\.dismiss) private var dismiss
     @State private var startedAt = Date.now
-    @State private var hudVisible = true
-    @State private var quality = "超清 14M"
-    @State private var frameRate = "144 帧"
-    @State private var showSecurity = false
     @State private var showControlHub = false
+    @State private var showMouseTools = false
+    @State private var confirmExit = false
+    @State private var openedAttempt: Int?
+    @State private var attempt = 0
+    @State private var connectionError: String?
+    @State private var retryPassword = ""
     @State private var session = SessionService.shared
-
-    private var watchMode: Bool { mode == .watch }
-
-    /// 是否启用真实会话链路(UI 测试注入 mock 时禁用)。
-    private var resolvedAddr: String? {
-        if let directAddr { return directAddr }
-        return LANDiscoveryService.shared.directAddr(forDeviceID: device.id)
-    }
-
-    private var useRealSession: Bool {
-        !AuthService.uiTestingMock && resolvedAddr != nil
+    private var watchMode: Bool { mode == .watch || session.peerWatchOnly }
+    private var failure: String? {
+        if case .ended(let reason) = session.state { return reason }
+        return connectionError
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // 画面区:真实会话或占位
+        ZStack {
             RCColor.stageBg.ignoresSafeArea()
-            if session.isActive {
-                RemoteVideoView(session: session)
+            if session.isConnected {
+                RemoteVideoView(session: session, watchOnly: watchMode, showMouseTools: showMouseTools,
+                                previewDeviceID: directAddr == nil ? device.id : nil)
                     .ignoresSafeArea()
+            } else if let failure {
+                ScrollView {
+                  VStack(spacing: 16) {
+                    Label("连接已结束", rabbitIcon: .sessionEnded).font(.headline)
+                    Text(failure).font(.callout).multilineTextAlignment(.center).textSelection(.enabled)
+                    SecureField("远端连接密码（如需）", text: $retryPassword)
+                        .textContentType(.password).textFieldStyle(.roundedBorder)
+                        .submitLabel(.go).onSubmit { attempt += 1 }
+                        .foregroundStyle(.primary).frame(maxWidth: 320)
+                    Button("重新连接") { attempt += 1 }.buttonStyle(.borderedProminent)
+                    Button("返回") { dismiss() }
+                  }.frame(maxWidth: .infinity).padding(24).foregroundStyle(.white)
+                }.scrollBounceBehavior(.basedOnSize).scrollDismissesKeyboard(.interactively)
+                    .safeAreaPadding(.top, 56)
+            } else if AuthService.uiTestingMock {
+                Text("会话预览").foregroundStyle(.white)
             } else {
-                VStack(spacing: 10) {
-                    if useRealSession, case .ended(let reason) = session.state {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(RCColor.warning)
-                        Text(reason)
-                            .font(.system(size: 13))
-                            .foregroundStyle(RCColor.textSecondary)
-                    } else {
-                        ProgressView()
-                            .tint(.white)
-                        Text(useRealSession ? session.state.displayText : "画面接入将在后续版本桥接视频层")
-                            .font(.system(size: 13))
-                            .foregroundStyle(RCColor.textSecondary)
-                    }
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text(session.state == .idle ? "正在连接…" : session.state.displayText)
+                }.foregroundStyle(.white)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 0) {
+                    Button {
+                        if session.isConnected { confirmExit = true } else { dismiss() }
+                    } label: { RabbitIcon(.close, size: 18).frame(width: 44, height: 44) }
+                    .accessibilityLabel("退出远程协助").accessibilityIdentifier("session.exit")
+                    Divider().frame(height: 18)
+                    Button { session.releasePressedInput(); showControlHub = true } label: {
+                        Label(watchMode ? "观看模式" : "会话控制", rabbitIcon: .settings)
+                            .padding(.horizontal, 12).frame(minHeight: 44)
+                    }.accessibilityIdentifier("session.controlCenter")
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            if watchMode {
-                Text("观看模式")
-                    .font(.system(size: 12))
-                    .foregroundStyle(RCColor.textSecondary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background(RCColor.bgHover.opacity(0.9), in: Capsule())
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.leading, 16)
-                    .padding(.top, 76)
-            }
-
-            // 顶部会话工具栏
-            topBar
-
-            // HUD(右下角常驻)
-            if hudVisible {
-                SessionHUD(startedAt: startedAt, hud: session.hud)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 32)
-                    .accessibilityIdentifier("session.hud")
-            }
-
-            // HUD 显隐切换(左下偏移小按钮)
-            Button {
-                hudVisible.toggle()
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .frame(width: 32, height: 32)
-                    .background(RCColor.hudBg, in: Circle())
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            .padding(.leading, 24)
-            .padding(.bottom, 32)
-            .accessibilityIdentifier("session.toggleHUD")
+                .font(.subheadline.bold()).foregroundStyle(.white).background(RCColor.hudBg, in: Capsule())
+                if PrefsStore.shared.showHUD && session.isConnected {
+                    SessionHUD(startedAt: startedAt, hud: session.hud).allowsHitTesting(false)
+                }
+            }.padding(.trailing, 12)
         }
-        .statusBarHidden(true)
-        .onAppear {
-            guard useRealSession, !session.isActive else { return }
-            openSession()
+        .statusBarHidden().persistentSystemOverlays(.hidden)
+        .task(id: attempt) {
+            guard openedAttempt != attempt else { return }
+            openedAttempt = attempt
+            await openSession()
         }
-        .onDisappear {
-            session.close()
-        }
-        .sheet(isPresented: $showSecurity) {
-            SecurityStatusView()
-                .presentationDetents([.medium])
+        .confirmationDialog("结束本次远程协助？", isPresented: $confirmExit, titleVisibility: .visible) {
+            Button("结束会话", role: .destructive) { dismiss() }
+            Button("取消", role: .cancel) {}
         }
         .sheet(isPresented: $showControlHub) {
-            SessionControlHub(session: session, device: device) {
-                showControlHub = false
-                dismiss()
-            }
-            .presentationDetents([.medium, .large])
+            SessionControlHub(session: session, device: device, watchOnly: watchMode, showMouseTools: $showMouseTools) { showControlHub = false; dismiss() }
+                .presentationDetents([.large]).presentationDragIndicator(.visible)
         }
     }
 
-    /// 账号设备(9 位设备码)且信令在线 → 一键连接(三阶路由+免密);
-    /// 否则回退直连地址。
-    private func openSession() {
-        let digits = device.id.filter { $0.isNumber }
-        if digits.count == 9, RuntimeService.shared.signalRunning {
-            Task {
-                do {
-                    let result = try await RuntimeService.connect(
-                        targetID: digits,
-                        watchOnly: watchMode,
-                        lanDirectAddr: nil  // 信令路由本身已按 LAN→P2P→中继 三阶优选;传 beacon 地址反而会绕开授权票据路径
-                    )
-                    await MainActor.run {
-                        session.adopt(sessionID: result.sessionID)
-                    }
-                } catch {
-                    // 信令连接失败回退直连
-                    if let addr = resolvedAddr {
-                        await MainActor.run {
-                            session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
-                        }
-                    }
-                }
-            }
-        } else if let addr = resolvedAddr {
-            session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
+    private func openSession() async {
+        guard !AuthService.uiTestingMock else { return }
+        session.close()
+        startedAt = .now
+        connectionError = nil
+        let password = retryPassword.isEmpty ? connectionPassword : retryPassword
+        if let directAddr {
+            session.open(connectAddr: directAddr, password: password, watchOnly: mode == .watch)
+            return
         }
-    }
-
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            // 安全状态(S2)
-            Button {
-                showSecurity = true
-            } label: {
-                Image(systemName: "shield")
-                    .font(.system(size: 16))
-                    .foregroundStyle(RCColor.textSecondary)
-                    .frame(width: 32, height: 32)
-            }
-            .accessibilityIdentifier("session.security")
-
-            // 屏幕 tab(单屏 mock)
-            Text("显示屏1 (Built-in Retina Display)")
-                .font(.system(size: 12))
-                .foregroundStyle(RCColor.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.white, in: Capsule())
-                .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
-                .frame(maxWidth: 180)
-
-            Spacer()
-
-            // 计时器
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                Text(sessionElapsed(at: context.date))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(RCColor.textSecondary)
-            }
-            .accessibilityIdentifier("session.timer")
-
-            // 控制中心
-            Button { showControlHub = true } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.grid.2x2")
-                    Text("控制中枢")
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(RCColor.textPrimary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(RCColor.bgHover, in: Capsule())
-            }
-            .accessibilityIdentifier("session.controlCenter")
+        let id = device.id.replacingOccurrences(of: " ", with: "")
+        if id.count == 9, RuntimeService.shared.signalRunning {
+            do {
+                let result = try await RuntimeService.connect(targetID: id, password: password, watchOnly: mode == .watch,
+                    lanDirectAddr: LANDiscoveryService.shared.directAddr(forDeviceID: id))
+                guard !Task.isCancelled else { SessionService.releaseSession(result.sessionID); return }
+                session.adopt(sessionID: result.sessionID, watchOnly: mode == .watch)
+            } catch { if !Task.isCancelled { connectionError = error.localizedDescription } }
+        } else {
+            connectionError = "账号信令未就绪，无法验证设备身份。请检查网络和登录状态后重试。"
         }
-        .padding(.horizontal, 10)
-        .frame(height: 48)
-        .background(.white.opacity(0.96))
-    }
-
-    private func sessionElapsed(at date: Date) -> String {
-        let seconds = max(0, Int(date.timeIntervalSince(startedAt)))
-        let h = seconds / 3600
-        let m = (seconds % 3600) / 60
-        let s = seconds % 60
-        return String(format: "%02d:%02d:%02d", h, m, s)
     }
 }
 
-/// S4 HUD:静态 mock 链路数据,字段与 `LoopbackReport` 语义对齐,后续接真数据。
 struct SessionHUD: View {
     var startedAt: Date
-    /// 真实链路统计(SessionUpdate.hud),无数据时各项显示 0。
+    /// 没有测量值时显示占位符，不当作零。
     var hud: [String: Any]?
 
     private var resolutionLabel: String {
-        hud?["resolution"] as? String ?? "-"
+        hud?["resolution"] as? String ?? "—"
     }
 
     private func fmt(_ value: Any?, digits: Int) -> String {
-        let number = (value as? NSNumber)?.doubleValue ?? 0
+        guard let number = (value as? NSNumber)?.doubleValue else { return "—" }
         return String(format: "%.\(digits)f", number)
     }
 
@@ -229,7 +132,7 @@ struct SessionHUD: View {
                     .foregroundStyle(.white)
             }
             Group {
-                Text(hud?["transport"] as? String ?? "-")
+                Text(hud?["transport"] as? String ?? "—")
                 Text("\(fmt(hud?["fps"], digits: 0)) fps")
                 Text("\(fmt(hud?["bitrate_kbps"], digits: 1)) Kbps")
                 Text("\(fmt(hud?["rtt_ms"], digits: 0)) ms")
@@ -252,125 +155,5 @@ struct SessionHUD: View {
         let m = (seconds % 3600) / 60
         let s = seconds % 60
         return String(format: "%02d:%02d:%02d", h, m, s)
-    }
-}
-
-/// S2 安全状态面板:防窥模式 Select + 被控静音/自动锁屏 Switch。
-/// 「需关注」琥珀 pill 判定:防窥模式=「关闭」或自动锁屏=关时显示(设计规范 S2)。
-struct SecurityStatusView: View {
-    @State private var privacyMode = "隐私屏保"
-    @State private var muted = false
-    @State private var autoLock = false
-
-    private let privacyOptions = ["隐私屏保", "黑屏", "关闭"]
-
-    private var needsAttention: Bool {
-        privacyMode == "关闭" || !autoLock
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("安全状态")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(RCColor.textPrimary)
-                Spacer()
-                if needsAttention {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 11))
-                        Text("需关注")
-                            .font(.system(size: 12))
-                    }
-                    .foregroundStyle(RCColor.warning)
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background(Color(hex: 0xFFF7E8), in: Capsule())
-                    .accessibilityIdentifier("security.attention")
-                }
-            }
-
-            // 防窥模式
-            HStack(spacing: 12) {
-                Image(systemName: "eye.slash")
-                    .font(.system(size: 16))
-                    .foregroundStyle(RCColor.textSecondary)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("防窥模式")
-                        .font(.system(size: 14))
-                        .foregroundStyle(RCColor.textPrimary)
-                    Text("被控端屏幕已防护,遮挡屏幕内容")
-                        .font(.system(size: 12))
-                        .foregroundStyle(RCColor.textSecondary)
-                }
-                Spacer()
-                Menu {
-                    ForEach(privacyOptions, id: \.self) { option in
-                        Button {
-                            privacyMode = option
-                        } label: {
-                            if option == privacyMode {
-                                Label(option, systemImage: "checkmark")
-                            } else {
-                                Text(option)
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(privacyMode)
-                            .font(.system(size: 13))
-                            .foregroundStyle(RCColor.textPrimary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10))
-                            .foregroundStyle(RCColor.textSecondary)
-                    }
-                }
-                .accessibilityIdentifier("security.privacyMode")
-            }
-
-            // 被控静音
-            HStack(spacing: 12) {
-                Image(systemName: muted ? "speaker.slash" : "speaker.wave.2")
-                    .font(.system(size: 16))
-                    .foregroundStyle(RCColor.textSecondary)
-                    .frame(width: 24)
-                Text("被控静音")
-                    .font(.system(size: 14))
-                    .foregroundStyle(RCColor.textPrimary)
-                Text(muted ? "已静音" : "已外放")
-                    .font(.system(size: 12))
-                    .foregroundStyle(RCColor.textSecondary)
-                Spacer()
-                Toggle("", isOn: $muted)
-                    .labelsHidden()
-                    .tint(RCColor.accent)
-                    .accessibilityIdentifier("security.muted")
-            }
-
-            // 自动锁屏
-            HStack(spacing: 12) {
-                Image(systemName: "lock")
-                    .font(.system(size: 16))
-                    .foregroundStyle(RCColor.textSecondary)
-                    .frame(width: 24)
-                Text("自动锁屏")
-                    .font(.system(size: 14))
-                    .foregroundStyle(RCColor.textPrimary)
-                Text(autoLock ? "已开启" : "未开启")
-                    .font(.system(size: 12))
-                    .foregroundStyle(RCColor.textSecondary)
-                Spacer()
-                Toggle("", isOn: $autoLock)
-                    .labelsHidden()
-                    .tint(RCColor.accent)
-                    .accessibilityIdentifier("security.autoLock")
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
     }
 }

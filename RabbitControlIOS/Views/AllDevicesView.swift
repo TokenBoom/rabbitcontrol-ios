@@ -1,45 +1,68 @@
 import SwiftUI
 
-/// 全部设备页(P3 移动端适配):电脑与手机/平板两个分组。
 struct AllDevicesView: View {
-    // mock:与 §6.0 P3 对齐,电脑 4 台 + 手机/平板 4 台
-    private let computers: [Device] = [
-        Device(id: "y-local-mbp", name: "Y的 MacBook Pro", kind: .mac, online: true, isLocal: true, wallpaper: .coast),
-        Device(id: "desktop-q5q8e8r", name: "DESKTOP-Q5Q8E8R", kind: .windows, online: true, isLocal: false, wallpaper: .lake),
-        Device(id: "yii-mbp", name: "yii's MacBook Pro", kind: .mac, online: true, isLocal: false, wallpaper: .sunset),
-        Device(id: "yii-mac-mini", name: "Y 的 Mac mini", kind: .mac, online: true, isLocal: false, wallpaper: .lake),
-    ]
-    private let mobiles: [Device] = [
-        Device(id: "iphone-17-pro-max", name: "iPhone 17 Pro Max", kind: .phone, online: true, isLocal: false, wallpaper: .coast),
-        Device(id: "iqoo-pad2-pro", name: "iQOO Pad2 Pro", kind: .tablet, online: true, isLocal: false, wallpaper: .sunset),
-        Device(id: "oneplus-pgp110", name: "OnePlusPGP110", kind: .phone, online: true, isLocal: false, wallpaper: .lake),
-        Device(id: "oneplus-ace-pro", name: "一加 Ace Pro 全网通版", kind: .phone, online: true, isLocal: false, wallpaper: .coast),
-    ]
+    var devices: () -> [Device]
+    @State private var search = ""
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                group(title: "电脑", devices: computers)
-                group(title: "手机 / 平板", devices: mobiles)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
+        let devices = devices()
+        let matches = devices.filter { $0.matches(search: search) }
+        List {
+            group("电脑", matches.filter { $0.kind == .mac || $0.kind == .windows })
+            group("手机 / 平板", matches.filter { $0.kind == .phone || $0.kind == .tablet })
         }
-        .background(RCColor.bgPage)
+        .overlay {
+            if devices.isEmpty {
+                if AuthService.shared.loadingDevices { ProgressView("正在加载设备…") }
+                else if let error = AuthService.shared.devicesError {
+                    ContentUnavailableView {
+                        Label {
+                            Text("未能加载设备")
+                        } icon: {
+                            RabbitIcon(.networkError, size: 42)
+                        }
+                    } description: { Text(error) } actions: {
+                        Button("重试") { Task { await AuthService.shared.refreshDevices() } }
+                    }
+                } else {
+                    ContentUnavailableView {
+                        Label {
+                            Text("暂无账号设备")
+                        } icon: {
+                            RabbitIcon(.devices, size: 44)
+                        }
+                    }
+                }
+            } else if matches.isEmpty { ContentUnavailableView {
+                Label {
+                    Text("没有匹配的设备")
+                } icon: {
+                    RabbitIcon(.search, size: 42)
+                }
+            } description: { Text("可按设备名称或九位 ID 查找。") } actions: {
+                Button("清除搜索") { search = "" }
+            } }
+        }
+        .refreshable { await AuthService.shared.refreshDevices() }
+        .scrollDismissesKeyboard(.interactively)
+        .searchable(text: $search, prompt: "设备名称或 ID")
         .navigationTitle("全部设备")
-        .onAppear { AppChrome.shared.tabBarHidden = true }
-        .onDisappear { AppChrome.shared.tabBarHidden = false }
-
     }
 
-    private func group(title: String, devices: [Device]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(RCColor.textPrimary)
-            VStack(spacing: 10) {
-                ForEach(devices) { device in
-                    DeviceCard(device: device)
+    @ViewBuilder private func group(_ title: String, _ items: [Device]) -> some View {
+        if !items.isEmpty {
+            Section(title) {
+                ForEach(items) { device in
+                    NavigationLink { DeviceDetailView(device: device) } label: {
+                        HStack(spacing: 12) {
+                            RabbitIcon(device.kind.icon, size: 24).foregroundStyle(.tint).frame(width: 32)
+                            VStack(alignment: .leading) {
+                                Text(device.name).font(.headline)
+                                Text("\(device.online ? "在线" : "离线") · \(device.displayID)")
+                                    .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                        }.padding(.vertical, 3)
+                    }.accessibilityIdentifier("all.device.\(device.id)")
                 }
             }
         }

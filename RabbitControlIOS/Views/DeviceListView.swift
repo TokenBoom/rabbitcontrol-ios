@@ -5,6 +5,7 @@ import SwiftUI
 /// 数据源为**登录账号的设备**;局域网发现不作为独立设备来源,
 /// 仅在发现的节点与本账号设备匹配(device_id)时,标记 LAN 直连可用。
 struct DeviceListView: View {
+    var openAssist: () -> Void
     @State private var onlineExpanded = true
     @State private var offlineExpanded = true
 
@@ -17,18 +18,8 @@ struct DeviceListView: View {
     }
 
     private var devices: [Device] {
-        auth.devices.map { accountDevice in
-            let compactID = accountDevice.deviceID.replacingOccurrences(of: " ", with: "")
-            let formattedCompact = accountDevice.formattedID.replacingOccurrences(of: " ", with: "")
-            return Device(
-                id: accountDevice.deviceID,
-                name: accountDevice.displayName,
-                kind: Device.Kind(osString: accountDevice.os),
-                online: accountDevice.online,
-                isLocal: lanDeviceIDs.contains(compactID) || lanDeviceIDs.contains(formattedCompact),
-                wallpaper: Device.Wallpaper(hashSeed: accountDevice.deviceID)
-            )
-        }
+        let nearbyIDs = lanDeviceIDs
+        return auth.devices.map { $0.card(nearbyIDs: nearbyIDs) }
     }
 
     private var onlineDevices: [Device] { devices.filter(\.online) }
@@ -39,13 +30,12 @@ struct DeviceListView: View {
             if auth.isLoggedIn {
                 deviceList
             } else {
-                LoginView()
+                LoginView(openAssist: openAssist)
             }
         }
         .background(RCColor.bgPage)
         .navigationBarHidden(true)
-        .task {
-            await auth.refreshDevices()
+        .task(id: auth.isLoggedIn) {
             auth.startAutoRefresh()
         }
     }
@@ -54,35 +44,55 @@ struct DeviceListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                Button(action: openAssist) {
+                    HStack(spacing: 12) {
+                        RabbitIcon(.remoteAssist, size: 27)
+                            .frame(width: 44, height: 44).foregroundStyle(.tint)
+                            .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading) {
+                            Text("远程协助").font(.headline)
+                            Text("使用设备 ID 或直连地址连接").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        RabbitIcon(.chevronRight, size: 16)
+                    }.padding().background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
+                }.buttonStyle(.plain).accessibilityIdentifier("devices.assist")
 
                 if let error = auth.devicesError {
-                    Text("设备列表刷新失败:\(error)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(RCColor.danger)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("未能刷新设备", rabbitIcon: .warning).font(.headline)
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                        Button("重新加载") { Task { await auth.refreshDevices() } }.disabled(auth.loadingDevices)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
                 }
 
                 if devices.isEmpty && auth.devicesError == nil {
-                    emptyState
+                    if auth.loadingDevices {
+                        ProgressView("正在加载设备…").frame(maxWidth: .infinity)
+                    } else { emptyState }
                 }
 
-                DeviceSection(
-                    title: "在线设备",
-                    count: onlineDevices.count,
-                    expanded: $onlineExpanded,
-                    devices: onlineDevices
-                )
+                if !onlineDevices.isEmpty {
+                    DeviceSection(
+                        title: "在线设备",
+                        count: onlineDevices.count,
+                        expanded: $onlineExpanded,
+                        devices: onlineDevices
+                    )
 
-                DeviceSection(
-                    title: "离线设备",
-                    count: offlineDevices.count,
-                    expanded: $offlineExpanded,
-                    devices: offlineDevices
-                )
+                }
+                if !offlineDevices.isEmpty {
+                    DeviceSection(
+                        title: "离线设备",
+                        count: offlineDevices.count,
+                        expanded: $offlineExpanded,
+                        devices: offlineDevices
+                    )
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            // 给悬浮 tab 条留出不遮挡列表的空间
-            .padding(.bottom, 110)
         }
         .refreshable {
             await auth.refreshDevices()
@@ -91,14 +101,13 @@ struct DeviceListView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "laptopcomputer.and.iphone")
-                .font(.system(size: 36))
+            RabbitIcon(.devices, size: 46)
                 .foregroundStyle(RCColor.textDisabled)
             Text("暂无设备")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(RCColor.textSecondary)
             Text("在你的其他设备上登录同一账号后,会显示在这里")
-                .font(.system(size: 12))
+                .font(.caption)
                 .foregroundStyle(RCColor.textDisabled)
                 .multilineTextAlignment(.center)
         }
@@ -108,25 +117,24 @@ struct DeviceListView: View {
 
     private var header: some View {
         HStack {
-            Text("可控设备")
-                .font(.system(size: 28, weight: .bold))
+            Text("我的设备")
+                .font(.largeTitle.bold())
                 .foregroundStyle(RCColor.textPrimary)
                 .accessibilityIdentifier("root.title")
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             NavigationLink {
-                AllDevicesView()
+                AllDevicesView { devices }
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 13))
+                    RabbitIcon(.allDevices, size: 17)
                     Text("全部设备")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                 }
                 .foregroundStyle(RCColor.textPrimary)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Color.white.opacity(0.85), in: Capsule())
+                .frame(minHeight: 44)
+                .background(RCColor.bgWindow, in: Capsule())
                 .overlay {
                     Capsule().strokeBorder(RCColor.stroke, lineWidth: 0.5)
                 }
@@ -152,15 +160,15 @@ struct DeviceSection: View {
             } label: {
                 HStack(spacing: 4) {
                     Text("\(title) \(count)")
-                        .font(.system(size: 14))
+                        .font(.subheadline)
                         .foregroundStyle(RCColor.textSecondary)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 12))
+                    RabbitIcon(expanded ? .chevronUp : .chevronDown, size: 14)
                         .foregroundStyle(RCColor.textSecondary)
                     Spacer()
-                }
+                }.frame(minHeight: 44).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "已展开" : "已收起")
             .accessibilityIdentifier("section.\(title)")
 
             if expanded {
@@ -185,19 +193,10 @@ struct DeviceSection: View {
 struct DeviceCard: View {
     var device: Device
 
-    private var platformIcon: String {
-        switch device.kind {
-        case .mac: "laptopcomputer"
-        case .windows: "pc"
-        case .phone: "iphone"
-        case .tablet: "ipad"
-        }
-    }
-
     var body: some View {
         HStack(spacing: 12) {
             ZStack(alignment: .topLeading) {
-                WallpaperView(wallpaper: device.wallpaper)
+                DevicePreview(device: device)
                     .frame(width: 96, height: 64)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .saturation(device.online ? 1 : 0.4)
@@ -221,7 +220,7 @@ struct DeviceCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Text(device.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.headline)
                         .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textSecondary)
                     if device.isLocal {
                         Text("LAN")
@@ -232,17 +231,15 @@ struct DeviceCard: View {
                             .background(RCColor.online, in: Capsule())
                     }
                 }
-                Image(systemName: platformIcon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(device.online ? RCColor.accent : RCColor.textDisabled)
+                Label(device.displayID, rabbitIcon: device.kind.icon)
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13))
+            RabbitIcon(.chevronRight, size: 16)
                 .foregroundStyle(RCColor.textDisabled)
         }
         .padding(8)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12))
+        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
     }
 }

@@ -55,7 +55,7 @@ final class PrefsStore {
         qualityPreset = QualityPreset(rawValue: d.string(forKey: "prefs.qualityPreset") ?? "") ?? .balanced
         customBitrateBps = d.object(forKey: "prefs.customBitrateBps") as? Int ?? 8_000_000
         customFps = d.object(forKey: "prefs.customFps") as? Int ?? 30
-        showHUD = d.object(forKey: "prefs.showHUD") as? Bool ?? true
+        showHUD = d.object(forKey: "prefs.showHUD") as? Bool ?? false
         encryptConnection = d.object(forKey: "prefs.encryptConnection") as? Bool ?? true
     }
 

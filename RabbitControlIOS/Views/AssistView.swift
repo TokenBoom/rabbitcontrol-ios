@@ -1,232 +1,108 @@
+import Network
 import SwiftUI
-import UIKit
 
-/// 「远程协助」页(P2 移动端适配):远控伙伴设备卡片 + 本设备卡片。
-struct AssistView: View {
-    @State private var partnerID = ""
-    @State private var allowAssist = true
-    @State private var codeVisible = true
-    @State private var verifyMode = MockData.verifyModes[0]
-    @State private var directTarget: DirectTarget?
+/// 手动连接只接受数字 IP:端口或本账号九位设备码。
+enum AssistTarget: Identifiable, Equatable {
+    case direct(String), account(String)
 
-    /// 直连目标:输入为 ip:port 时触发真实直连会话。
-    struct DirectTarget: Identifiable, Hashable {
-        let addr: String
-        var id: String { addr }
+    init?(_ input: String) {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let digits = text.replacingOccurrences(of: " ", with: "")
+        if digits.count == 9, digits.utf8.allSatisfy({ (48...57).contains($0) }) {
+            self = .account(digits)
+            return
+        }
+        guard let separator = text.lastIndex(of: ":"),
+              let port = UInt16(text[text.index(after: separator)...]), port > 0 else { return nil }
+        let host = String(text[..<separator])
+        guard IPv4Address(host) != nil || (host.hasPrefix("[") && host.hasSuffix("]") && IPv6Address(String(host.dropFirst().dropLast())) != nil) else { return nil }
+        self = .direct(text)
     }
 
-    /// 输入是否为直连地址(含端口,如 192.168.1.10:9901 或 127.0.0.1:9901)。
-    private var parsedDirectAddr: String? {
-        let trimmed = partnerID.trimmingCharacters(in: .whitespaces)
-        guard trimmed.contains(":"),
-              let portStr = trimmed.split(separator: ":").last,
-              Int(portStr) != nil else { return nil }
-        return trimmed
+    var id: String {
+        switch self { case .direct(let value), .account(let value): value }
+    }
+    var address: String? { if case .direct(let addr) = self { addr } else { nil } }
+}
+
+struct AssistView: View {
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var editing: Bool
+    @State private var input = ""
+    @State private var password = ""
+    @State private var mode: DeviceDetailView.SessionMode = .control
+    @State private var target: AssistTarget?
+    private var parsed: AssistTarget? { AssistTarget(input) }
+
+    private var problem: String? {
+        guard !input.isEmpty else { return nil }
+        guard let parsed else { return "请输入九位设备 ID，或 IP 地址和端口（1–65535）。" }
+        if case .account(let id) = parsed {
+            guard AuthService.shared.isLoggedIn else { return "请先登录设备所属账号，或使用直连地址。" }
+            guard let device = AuthService.shared.devices.first(where: { $0.deviceID.replacingOccurrences(of: " ", with: "") == id }) else { return "此 ID 不在当前账号的设备列表中。" }
+            guard device.online, !device.disabled, device.allowRemoteAssist else { return "设备离线或未允许远程协助。" }
+        }
+        return nil
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("开始协助")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(RCColor.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-
-                partnerCard
-                localCard
+        Form {
+            Section {
+                HStack {
+                    TextField("设备 ID 或 IP:端口", text: $input)
+                        .keyboardType(.numbersAndPunctuation).textInputAutocapitalization(.never)
+                        .autocorrectionDisabled().focused($editing).submitLabel(.go)
+                        .onSubmit(connect).accessibilityIdentifier("assist.partnerID")
+                    if input.isEmpty {
+                        PasteButton(payloadType: String.self) { items in
+                            if let text = items.first { input = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        }
+                        .labelStyle(.titleOnly).buttonBorderShape(.capsule).controlSize(.small)
+                    } else {
+                        Button { input = "" } label: { RabbitIcon(.close, size: 14).frame(width: 32, height: 32) }
+                            .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清除连接目标")
+                    }
+                }
+            } header: { Text("连接目标") } footer: {
+                Text(problem ?? "输入同一账号下的设备 ID，或对方提供的直连地址，例如 192.168.1.10:9901。")
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 110)
+            Section {
+                Picker("模式", selection: $mode) {
+                    Text("远程控制").tag(DeviceDetailView.SessionMode.control)
+                    Text("仅查看设备").tag(DeviceDetailView.SessionMode.watch)
+                }.pickerStyle(.segmented)
+                SecureField("远端连接密码（如需）", text: $password)
+                    .textContentType(.password)
+                    .submitLabel(.go).onSubmit(connect)
+            } header: { Text("连接方式") } footer: {
+                Text(mode == .watch ? "仅查看不会发送键鼠操作，也不能使用远程工具。" : "需要对方设备允许控制；无需连接密码时留空。")
+            }
+            Button(action: connect) {
+                Label(mode == .watch ? "查看设备屏幕" : "开始远控", rabbitIcon: mode == .watch ? .eye : .cursor)
+                    .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+            }
+                .buttonStyle(.borderedProminent).listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                .disabled(parsed == nil || problem != nil)
+                .accessibilityIdentifier("assist.connect")
         }
-        .background(RCColor.bgPage)
-        .navigationBarHidden(true)
-        .navigationDestination(item: $directTarget) { target in
-            SessionView(
-                device: Device(
-                    id: "direct-\(target.addr)",
-                    name: target.addr,
-                    kind: .mac,
-                    online: true,
-                    isLocal: true,
-                    wallpaper: .coast
-                ),
-                mode: .control,
-                directAddr: target.addr
-            )
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("远程协助")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("关闭") { dismiss() }.accessibilityHidden(target != nil).accessibilityIdentifier("assist.close")
+            }
+        }
+        .accessibilityHidden(target != nil)
+        .fullScreenCover(item: $target, onDismiss: { password = ""; SessionService.shared.close() }) { target in
+            SessionView(device: Device(id: target.id, name: target.id, kind: .mac, online: true,
+                                       isLocal: false, wallpaper: .coast), mode: mode, directAddr: target.address,
+                        connectionPassword: password)
         }
     }
 
-    // MARK: - 远控伙伴设备
-
-    private var partnerCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("远控伙伴设备")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(RCColor.textPrimary)
-            Text("通过其他设备的【设备 ID】及【设备验证码】启动远程控制")
-                .font(.system(size: 13))
-                .foregroundStyle(RCColor.textSecondary)
-
-            Text("伙伴的设备 ID")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(RCColor.textPrimary)
-
-            TextField("设备 ID 或直连地址 ip:port", text: $partnerID)
-                .keyboardType(.numbersAndPunctuation)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 15))
-                .padding(.horizontal, 14)
-                .frame(height: 52)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(partnerID.isEmpty ? RCColor.stroke : RCColor.accent, lineWidth: 1)
-                }
-                .accessibilityIdentifier("assist.partnerID")
-
-            Button {
-                if let addr = parsedDirectAddr {
-                    directTarget = DirectTarget(addr: addr)
-                } else {
-                    ToastCenter.shared.show("设备 ID 连接需要信令服务,即将支持;直连请输入 ip:port")
-                }
-            } label: {
-                Text("开始远控")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .background(
-                        partnerID.isEmpty ? RCColor.accent.opacity(0.5) : RCColor.accent,
-                        in: RoundedRectangle(cornerRadius: 10)
-                    )
-            }
-            .disabled(partnerID.isEmpty)
-            .accessibilityIdentifier("assist.connect")
-
-            HStack(spacing: 16) {
-                Spacer()
-                Button("最近连接") {
-                    ToastCenter.shared.show("暂无历史记录")
-                }
-                Rectangle()
-                    .fill(RCColor.stroke)
-                    .frame(width: 1, height: 14)
-                Button("收藏设备") {
-                    ToastCenter.shared.show("功能开发中")
-                }
-                Spacer()
-            }
-            .font(.system(size: 14))
-            .foregroundStyle(RCColor.accent)
-            .buttonStyle(.plain)
-        }
-        .padding(20)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
-    }
-
-    // MARK: - 本设备
-
-    private var localCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("本设备")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(RCColor.textPrimary)
-                Spacer()
-                Text("允许他人远程协助")
-                    .font(.system(size: 13))
-                    .foregroundStyle(RCColor.textSecondary)
-                Toggle("", isOn: $allowAssist)
-                    .labelsHidden()
-                    .tint(RCColor.accent)
-                    .accessibilityIdentifier("assist.allowToggle")
-            }
-
-            if allowAssist {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("本设备 ID")
-                        .font(.system(size: 13))
-                        .foregroundStyle(RCColor.textSecondary)
-                    Text(MockData.localDeviceID)
-                        .font(.system(size: 34, weight: .semibold))
-                        .foregroundStyle(RCColor.textDisplayNum)
-                        .accessibilityIdentifier("assist.localID")
-
-                    HStack(spacing: 12) {
-                        Text(codeVisible ? MockData.localVerifyCode : "••••••••")
-                            .font(.system(size: 24, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(RCColor.textDisplayNum)
-                            .accessibilityIdentifier("assist.verifyCode")
-
-                        Button {
-                            codeVisible.toggle()
-                        } label: {
-                            Image(systemName: codeVisible ? "eye" : "eye.slash")
-                                .font(.system(size: 16))
-                                .foregroundStyle(RCColor.textSecondary)
-                                .frame(width: 32, height: 32)
-                        }
-                        .accessibilityIdentifier("assist.toggleCodeVisibility")
-
-                        Spacer()
-
-                        Button {
-                            UIPasteboard.general.string = "\(MockData.localDeviceID) · \(MockData.localVerifyCode)"
-                            ToastCenter.shared.show("已复制设备 ID 与验证码")
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "doc.on.doc")
-                                Text("复制并分享")
-                            }
-                            .font(.system(size: 13))
-                            .foregroundStyle(RCColor.textPrimary)
-                            .padding(.horizontal, 12)
-                            .frame(height: 32)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 8))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .strokeBorder(RCColor.stroke, lineWidth: 1)
-                            }
-                        }
-                        .accessibilityIdentifier("assist.copyShare")
-                    }
-
-                    Menu {
-                        ForEach(MockData.verifyModes, id: \.self) { mode in
-                            Button {
-                                verifyMode = mode
-                            } label: {
-                                if mode == verifyMode {
-                                    Label(mode, systemImage: "checkmark")
-                                } else {
-                                    Text(mode)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("验证方式:\(verifyMode)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(RCColor.textSecondary)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 11))
-                                .foregroundStyle(RCColor.textSecondary)
-                        }
-                    }
-                    .accessibilityIdentifier("assist.verifyMode")
-
-                    Text("每次远控结束刷新")
-                        .font(.system(size: 12))
-                        .foregroundStyle(RCColor.textSecondary)
-                }
-            }
-        }
-        .padding(20)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
+    private func connect() {
+        guard let parsed, problem == nil else { return }
+        editing = false
+        target = parsed
     }
 }

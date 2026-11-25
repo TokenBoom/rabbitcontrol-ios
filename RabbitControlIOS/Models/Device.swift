@@ -1,7 +1,6 @@
 import Foundation
 
-/// 受控设备。字段与 `rabbitcontrol-core` 设计文档 §6.0 Mock 数据总表对齐;
-/// 接入 `rc-client-core` 后由真实设备发现数据替换。
+/// 设备列表和会话共用的展示模型。
 struct Device: Identifiable, Hashable {
     enum Kind: String, Hashable {
         case mac
@@ -16,6 +15,18 @@ struct Device: Identifiable, Hashable {
         case lake
     }
 
+    var displayID: String {
+        let digits = id.filter { !$0.isWhitespace }
+        guard digits.count == 9, digits.allSatisfy(\.isNumber) else { return id }
+        return "\(digits.prefix(3)) \(digits.dropFirst(3).prefix(3)) \(digits.suffix(3))"
+    }
+
+    func matches(search: String) -> Bool {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty || name.localizedCaseInsensitiveContains(query) ||
+            id.filter { !$0.isWhitespace }.localizedCaseInsensitiveContains(query.filter { !$0.isWhitespace })
+    }
+
     let id: String
     let name: String
     let kind: Kind
@@ -25,22 +36,39 @@ struct Device: Identifiable, Hashable {
 }
 
 extension Device.Kind {
+    var icon: RabbitIcon.Name {
+        switch self {
+        case .mac: .computer
+        case .windows: .desktopPC
+        case .phone: .phone
+        case .tablet: .tablet
+        }
+    }
+
     /// 由服务端 os 字段推断设备类型。
     init(osString: String) {
         switch osString.lowercased() {
         case "macos", "mac": self = .mac
         case "windows", "win": self = .windows
-        case "ios", "ipados": self = .tablet
-        case "android": self = .phone
+        case "ipados", "tablet": self = .tablet
+        case "ios", "android", "phone": self = .phone
         default: self = .mac
         }
     }
 }
 
 extension Device.Wallpaper {
-    /// 由设备 ID 稳定选择壁纸(占位视觉,后续由真实截图替换)。
+    /// 设备列表占位壁纸。
     init(hashSeed: String) {
         let all: [Device.Wallpaper] = [.sunset, .coast, .lake]
-        self = all[abs(hashSeed.hashValue) % all.count]
+        self = all[Int(hashSeed.hashValue.magnitude % UInt(all.count))]
+    }
+}
+
+extension AccountDevice {
+    func card(nearbyIDs: Set<String>) -> Device {
+        Device(id: deviceID, name: displayName, kind: Device.Kind(osString: os), online: online,
+               isLocal: nearbyIDs.contains(deviceID.replacingOccurrences(of: " ", with: "")) || nearbyIDs.contains(formattedID.replacingOccurrences(of: " ", with: "")),
+               wallpaper: Device.Wallpaper(hashSeed: deviceID))
     }
 }

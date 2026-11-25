@@ -1,100 +1,89 @@
-import CoreImage
-import RabbitControlCore
 import SwiftUI
 
-/// 远端视频帧渲染:定时从 core 帧槽取 CVPixelBuffer,经 CoreImage 转为 CGImage 显示。
-///
-/// v1 采用 CIImage→CGImage 路径(GPU 色彩转换,CPU 拷贝一份);后续可换
-/// CVMetalTextureCache 零拷贝。帧所有权:take 即转移,渲染完成后必须 release。
-final class VideoFrameRenderer {
-    private let ciContext = CIContext()
-    private var lastSeq: UInt64 = 0
-
-    /// 尝试取新帧并渲染为 CGImage;无新帧返回 nil。调用线程不限。
-    func renderLatest() -> CGImage? {
-        guard let rawPtr = rc_apple_media_frame_take() else { return nil }
-        defer { rc_string_free(rawPtr) }
-        let json = String(cString: rawPtr)
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ptr = obj["ptr"] as? UInt64, ptr != 0,
-              let width = obj["width"] as? Int,
-              let height = obj["height"] as? Int,
-              let seq = obj["seq"] as? UInt64 else { return nil }
-        guard seq != lastSeq else {
-            rc_apple_media_frame_release(ptr)
-            return nil
-        }
-        lastSeq = seq
-        let pixelBuffer = Unmanaged<CVPixelBuffer>.fromOpaque(
-            UnsafeRawPointer(bitPattern: UInt(ptr))!
-        ).takeUnretainedValue()
-        defer { rc_apple_media_frame_release(ptr) }
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        return ciContext.createCGImage(
-            image,
-            from: CGRect(x: 0, y: 0, width: width, height: height)
-        )
-    }
-}
-
-/// 远端画面视图:CADisplayLink 驱动取帧,手势转为归一化输入事件。
+/// 远端画面视图:Metal 视图驱动取帧,手势转为归一化输入事件。
 struct RemoteVideoView: View {
     var session: SessionService
-    var onTapBackground: (() -> Void)?
+    var watchOnly: Bool
+    var showMouseTools: Bool
+    var previewDeviceID: String?
 
+    @State private var zoomPan = ZoomPanState()
     /// 触控按下期间持续上报移动(模拟鼠标拖拽)。
-    let zoomPan = ZoomPanState()
     @State private var touchActive = false
+    @State private var rightClick = false
+    @State private var showCaptureHint = false
+    @Environment(\.scenePhase) private var phase
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 RCColor.stageBg
-                MetalVideoView(zoomPan: zoomPan)
-                            }
+                MetalVideoView(zoomPan: zoomPan, previewDeviceID: previewDeviceID)
+                if !zoomPan.hasPresentedFrame {
+                    VStack(spacing: 10) {
+                        ProgressView().tint(.white)
+                        Text("已连接，等待桌面画面…").font(.headline)
+                        if showCaptureHint {
+                            Text("长时间没有画面？请在 Mac 上检查屏幕录制权限。").font(.footnote)
+                        }
+                    }.foregroundStyle(.white).multilineTextAlignment(.center).padding()
+                        .allowsHitTesting(false)
+                        .task {
+                            try? await Task.sleep(for: .seconds(8))
+                            if !Task.isCancelled { showCaptureHint = true }
+                        }
+                }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            .gesture(dragGesture(in: geo.size))
-            .onTapGesture {
-                // 单击=鼠标左键点按
-                session.sendMouseButton(button: "left", pressed: true)
-                session.sendMouseButton(button: "left", pressed: false)
-                onTapBackground?()
+            .gesture(dragGesture(in: geo.size), isEnabled: !watchOnly)
+            .overlay(alignment: .bottom) {
+                if !watchOnly && showMouseTools {
+                    HStack {
+                        Toggle("下次用右键", isOn: $rightClick).toggleStyle(.button)
+                            .accessibilityHint("启用后轻点画面一次以发送右键")
+                        Button { session.sendWheel(delta: 3) } label: { RabbitIcon(.arrowUp, size: 18).frame(minWidth: 32, minHeight: 32) }
+                            .accessibilityLabel("向上滚动")
+                        Button { session.sendWheel(delta: -3) } label: { RabbitIcon(.arrowDown, size: 18).frame(minWidth: 32, minHeight: 32) }
+                            .accessibilityLabel("向下滚动")
+                    }.buttonStyle(.bordered).padding(8)
+                    .foregroundStyle(.white).background(RCColor.hudBg, in: Capsule()).padding(.bottom, 32)
+                }
+            }
+            .onChange(of: showMouseTools) {
+                session.releasePressedInput()
+                touchActive = false
+                rightClick = false
+            }
+            .onDisappear {
+                session.releasePressedInput()
+                touchActive = false
+            }
+            .onChange(of: phase) {
+                if phase != .active { session.releasePressedInput(); touchActive = false }
             }
         }
     }
 
     /// 拖拽:起点按下左键,移动上报归一化坐标,抬起释放。
-    /// 视频在视图内的 aspect-fit 显示矩形(与 MetalVideoView 视口计算一致);
-    /// 视频尺寸未知时退化为填满。
-    private func videoRect(in size: CGSize) -> CGRect {
-        let vw = CGFloat(session.width), vh = CGFloat(session.height)
-        guard vw > 0, vh > 0, size.width > 0, size.height > 0 else {
-            return CGRect(origin: .zero, size: size)
-        }
-        let scale = min(size.width / vw, size.height / vh) * zoomPan.scale
-        let w = vw * scale, h = vh * scale
-        return CGRect(x: (size.width - w) / 2 + zoomPan.panX,
-                      y: (size.height - h) / 2 + zoomPan.panY,
-                      width: w, height: h)
-    }
-
     private func dragGesture(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if !touchActive {
-                    touchActive = true
-                    session.sendMouseButton(button: "left", pressed: true)
-                }
-                let rect = videoRect(in: size)
+                let rect = zoomPan.videoRect(in: size)
+                guard zoomPan.hasPresentedFrame, rect.contains(value.startLocation) else { return }
                 let nx = (value.location.x - rect.minX) / max(rect.width, 1)
                 let ny = (value.location.y - rect.minY) / max(rect.height, 1)
                 session.sendMouseMove(nx: nx, ny: ny)
+                if !touchActive {
+                    touchActive = true
+                    session.sendMouseButton(button: rightClick ? "right" : "left", pressed: true)
+                }
             }
             .onEnded { _ in
+                guard touchActive else { return }
                 touchActive = false
-                session.sendMouseButton(button: "left", pressed: false)
+                session.sendMouseButton(button: rightClick ? "right" : "left", pressed: false)
+                rightClick = false
             }
     }
 }

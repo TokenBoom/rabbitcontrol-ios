@@ -1,98 +1,53 @@
 import SwiftUI
 
-/// 全局界面状态:推入二级页面时隐藏悬浮 tab 条,避免遮挡内容。
-@Observable
-final class AppChrome {
-    static let shared = AppChrome()
-    var tabBarHidden = false
-}
-
-/// 应用根视图:三个主 tab(我的设备 / 远程协助 / 我的) + 底部悬浮胶囊 tab 条。
 struct RootView: View {
-    enum Tab: Int {
-        case devices
-        case assist
-        case profile
-    }
-
+    enum Tab { case devices, profile }
     @State private var selection: Tab = .devices
+    @State private var showAssist = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Group {
-                switch selection {
-                case .devices:
-                    NavigationStack {
-                        DeviceListView()
-                    }
-                case .assist:
-                    NavigationStack {
-                        AssistView()
-                    }
-                case .profile:
-                    NavigationStack {
-                        ProfileView()
+        NavigationStack {
+            VStack(spacing: 0) {
+                Group {
+                    switch selection {
+                    case .devices: DeviceListView { showAssist = true }
+                    case .profile: ProfileView { selection = .devices }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                if !showAssist {
+                    HStack(spacing: 0) {
+                        homeAction("我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
+                        homeAction("我的", icon: .person, selected: selection == .profile) { selection = .profile }
+                    }
+                    .padding(6)
+                    .background(.regularMaterial, in: Capsule())
+                    .frame(maxWidth: 520)
+                    .padding(.horizontal, 24)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if !AppChrome.shared.tabBarHidden {
-                FloatingTabBar(selection: $selection)
-                    .padding(.horizontal, 48)
-                    .padding(.bottom, 20)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-
-            ToastOverlay(center: ToastCenter.shared)
+            .background(RCColor.bgPage.ignoresSafeArea())
         }
-        .animation(.easeInOut(duration: 0.15), value: ToastCenter.shared.message)
-        .animation(.easeInOut(duration: 0.2), value: AppChrome.shared.tabBarHidden)
-    }
-}
-
-/// 底部悬浮胶囊 tab 条(移动端适配,iOS 原生 SF Symbols 对应设计规范 §3.5 的 Lucide 图标语义)。
-struct FloatingTabBar: View {
-    @Binding var selection: RootView.Tab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            tabItem(.devices, title: "我的设备", systemImage: "laptopcomputer.and.iphone")
-            tabItem(.assist, title: "远程协助", systemImage: "rectangle.2.swap")
-            tabItem(.profile, title: "我的", systemImage: "person")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay {
-            Capsule().strokeBorder(RCColor.stroke, lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+        .overlay { ToastOverlay(center: .shared).allowsHitTesting(false).animation(.easeInOut(duration: 0.2), value: ToastCenter.shared.message) }
+        .accessibilityHidden(showAssist)
+        .fullScreenCover(isPresented: $showAssist) { NavigationStack { AssistView() } }
     }
 
-    private func tabItem(_ tab: RootView.Tab, title: String, systemImage: String) -> some View {
-        let selected = selection == tab
-        return Button {
-            selection = tab
-        } label: {
+    private func homeAction(_ title: String, icon: RabbitIcon.Name, selected: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 20))
-                Text(title)
-                    .font(.system(size: 12))
+                RabbitIcon(icon, size: 22)
+                Text(title).font(.caption)
             }
-            .foregroundStyle(selected ? RCColor.accent : RCColor.textSecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 4)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: 999)
-                        .fill(RCColor.accent.opacity(0.12))
-                }
-            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .foregroundStyle(selected ? RCColor.accent : RCColor.textPrimary)
+            .background(selected ? RCColor.accent.opacity(0.12) : .clear, in: Capsule())
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("tab.\(title)")
     }
 }

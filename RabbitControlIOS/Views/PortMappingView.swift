@@ -1,111 +1,71 @@
 import SwiftUI
 
 /// 端口映射(W4 移动端适配):映射列表 + 添加弹窗(含 §7.1 校验)。
-/// 数据逐字取自设计文档 §6.0,接入真数据前为 mock。
 struct PortMappingView: View {
     var device: Device
 
-    @State private var mockMappings: [PortMapping] = MockMappings.items
     @State private var showAdd = false
     @State private var tools = ToolService.shared
     @State private var session = SessionService.shared
-
-    /// 有活动会话时用真实规则,否则保留 mock(供 UI 测试/预览)。
-    private var useReal: Bool { session.sessionID != nil }
+    @State private var removing: ToolService.PortmapRule?
+    @State private var actionError: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // 标题区:设备名 + 在线点 + 已连接
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(RCColor.online)
-                        .frame(width: 8, height: 8)
-                    Text("已连接")
-                        .font(.system(size: 13))
-                        .foregroundStyle(RCColor.textSecondary)
-                    Spacer()
-                    Button {
-                        showAdd = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus.circle")
-                            Text("添加")
-                        }
-                        .font(.system(size: 13))
-                        .foregroundStyle(RCColor.textPrimary)
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(RCColor.stroke, lineWidth: 1)
-                        }
-                    }
-                    .accessibilityIdentifier("portmap.add")
-                }
-
-                // 映射列表
-                VStack(spacing: 0) {
-                    Text("映射列表")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(RCColor.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-
-                    if useReal {
-                        if tools.portmapRules.isEmpty {
-                            RCColor.divider.frame(height: 1)
-                            Text("暂无映射")
-                                .font(.system(size: 13))
-                                .foregroundStyle(RCColor.textSecondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 20)
-                        }
-                        ForEach(tools.portmapRules) { rule in
-                            RCColor.divider.frame(height: 1)
-                            realMappingRow(rule)
-                        }
-                    } else {
-                        ForEach($mockMappings) { $mapping in
-                            RCColor.divider.frame(height: 1)
-                            mappingRow($mapping)
-                        }
-                    }
-                }
-                .background(.white, in: RoundedRectangle(cornerRadius: 12))
+        List {
+            Section {
+                LabeledContent("已连接", value: device.name)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
+            Section {
+                if tools.portmapRules.isEmpty {
+                    ContentUnavailableView {
+                        Label("暂无端口映射", rabbitIcon: .portMap)
+                    } description: {
+                        Text("点右上角的添加，设置本地端口与远端目标。")
+                    }
+                }
+                ForEach(tools.portmapRules) { rule in
+                    realMappingRow(rule)
+                        .swipeActions(allowsFullSwipe: false) {
+                            Button("移除", role: .destructive) { removing = rule }
+                        }
+                        .accessibilityAction(named: "移除映射") { removing = rule }
+                }
+            } header: { Text("本次会话的映射") } footer: {
+                if !tools.portmapRules.isEmpty { Text("使用开关暂停或恢复映射；向左滑动可移除。") }
+            }
         }
-        .background(RCColor.bgPage)
-        .navigationTitle("端口映射")
+        .navigationTitle("端口映射").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Button { showAdd = true } label: { Label("添加", rabbitIcon: .plus) }
+                .disabled(!session.isConnected).accessibilityIdentifier("portmap.add")
+        }
+        .confirmationDialog("移除这条映射？", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { rule in
+            Button("移除", role: .destructive) {
+                if let sid = session.sessionID { actionError = tools.portmapRemove(sessionID: sid, ruleID: rule.id) }
+            }
+        } message: { Text("移除“\($0.name)”后，本地端口将不再通过此规则转发。") }
+        .alert("操作未完成", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
         .onAppear {
-            AppChrome.shared.tabBarHidden = true
             if let sid = session.sessionID {
                 tools.start(sessionID: sid)
-                _ = tools // 事件驱动刷新列表
             }
         }
         .onDisappear {
-            AppChrome.shared.tabBarHidden = false
             tools.stop()
         }
 
         .sheet(isPresented: $showAdd) {
             AddMappingSheet { mapping in
-                if useReal, let sid = session.sessionID {
-                    tools.portmapAdd(
+                guard let sid = session.sessionID, session.isConnected else { return "会话已结束" }
+                return tools.portmapAdd(
                         sessionID: sid,
                         name: mapping.name,
-                        localPort: UInt16(mapping.localPort) ?? 0,
+                        localPort: mapping.localPort,
                         remoteHost: mapping.targetAddress,
-                        remotePort: UInt16(mapping.targetPort) ?? 0
-                    )
-                } else {
-                    mockMappings.append(mapping)
-                }
+                        remotePort: mapping.targetPort
+                )
             }
         }
     }
@@ -114,101 +74,41 @@ struct PortMappingView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(rule.name)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.headline)
                     .foregroundStyle(rule.enabled ? RCColor.textPrimary : RCColor.textDisabled)
                 Text(":\(rule.localPort) → \(rule.targetAddr):\(rule.targetPort)")
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.footnote.monospaced())
                     .foregroundStyle(rule.enabled ? RCColor.textSecondary : RCColor.textDisabled)
+                if let error = rule.error {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
             }
             Spacer()
             Toggle("", isOn: Binding(
                 get: { rule.enabled },
                 set: { on in
                     if let sid = session.sessionID {
-                        tools.portmapToggle(sessionID: sid, ruleID: rule.id, enabled: on)
+                        actionError = tools.portmapToggle(sessionID: sid, ruleID: rule.id, enabled: on)
                     }
                 }
             ))
-            .labelsHidden()
+            .labelsHidden().accessibilityLabel("启用映射：\(rule.name)")
             .tint(RCColor.accent)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 4)
     }
 
-    private func mappingRow(_ mapping: Binding<PortMapping>) -> some View {
-        let enabled = mapping.wrappedValue.enabled
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(mapping.wrappedValue.name)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(enabled ? RCColor.textPrimary : RCColor.textDisabled)
-                Text(":\(mapping.wrappedValue.localPort) → \(mapping.wrappedValue.targetAddress):\(mapping.wrappedValue.targetPort)")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(enabled ? RCColor.textSecondary : RCColor.textDisabled)
-                statusView(mapping.wrappedValue.status, enabled: enabled)
-            }
-            Spacer()
-            Toggle("", isOn: mapping.enabled)
-                .labelsHidden()
-                .tint(RCColor.accent)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
-    private func statusView(_ status: PortMapping.Status, enabled: Bool) -> some View {
-        let color = enabled ? statusColor(status) : RCColor.textDisabled
-        return Text(statusText(status))
-            .font(.system(size: 12))
-            .foregroundStyle(color)
-    }
-
-    private func statusText(_ status: PortMapping.Status) -> String {
-        switch status {
-        case .success: "✓ 成功"
-        case .failed: "✕ 失败"
-        case .connecting: "… 连接中"
-        }
-    }
-
-    private func statusColor(_ status: PortMapping.Status) -> Color {
-        switch status {
-        case .success: Color(hex: 0x00B42A)
-        case .failed: RCColor.danger
-        case .connecting: RCColor.textSecondary
-        }
-    }
 }
 
-struct PortMapping: Identifiable {
-    enum Status {
-        case success
-        case failed
-        case connecting
-    }
-
-    let id: String
-    var name: String
-    var localPort: String
-    var targetAddress: String
-    var targetPort: String
-    var status: Status
-    var enabled: Bool
+struct PortMapping {
+    let name: String
+    let localPort: UInt16
+    let targetAddress: String
+    let targetPort: UInt16
 }
 
-/// §6.0 W4 mock:映射 3 行。
-enum MockMappings {
-    static let items: [PortMapping] = [
-        PortMapping(id: "m1", name: "deepseek harness", localPort: "3080", targetAddress: "127.0.0.1", targetPort: "3080", status: .success, enabled: true),
-        PortMapping(id: "m2", name: "ssh-tunnel", localPort: "2222", targetAddress: "10.0.0.8", targetPort: "22", status: .failed, enabled: true),
-        PortMapping(id: "m3", name: "jupyter-lab", localPort: "8888", targetAddress: "127.0.0.1", targetPort: "8888", status: .connecting, enabled: true),
-    ]
-}
-
-/// 添加映射弹窗:四行表单 + §7.1 校验,通过后插入一条「连接中」新行。
 struct AddMappingSheet: View {
-    var onSave: (PortMapping) -> Void
+    var onSave: (PortMapping) -> String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -220,17 +120,27 @@ struct AddMappingSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("名称", text: $name)
-                    .accessibilityIdentifier("portmap.field.name")
-                TextField("本地端口", text: $localPort)
-                    .keyboardType(.numberPad)
-                    .accessibilityIdentifier("portmap.field.localPort")
-                TextField("目标地址", text: $targetAddress)
-                    .keyboardType(.URL)
-                    .accessibilityIdentifier("portmap.field.targetAddress")
-                TextField("目标端口", text: $targetPort)
-                    .keyboardType(.numberPad)
-                    .accessibilityIdentifier("portmap.field.targetPort")
+                Section("规则") {
+                    TextField("名称，例如开发服务器", text: $name)
+                        .accessibilityIdentifier("portmap.field.name")
+                }
+                Section {
+                    LabeledContent("本地端口") {
+                        TextField("1–65535", text: $localPort).keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing).accessibilityIdentifier("portmap.field.localPort")
+                    }
+                } header: { Text("此 iPhone / iPad") }
+                Section {
+                    TextField("目标主机或 IP", text: $targetAddress).keyboardType(.URL)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("portmap.field.targetAddress")
+                    LabeledContent("目标端口") {
+                        TextField("1–65535", text: $targetPort).keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing).accessibilityIdentifier("portmap.field.targetPort")
+                    }
+                } header: { Text("远端设备可访问的目标") } footer: {
+                    if let validation { Text(validation) }
+                }
 
                 if let error {
                     Text(error)
@@ -238,6 +148,7 @@ struct AddMappingSheet: View {
                         .foregroundStyle(RCColor.danger)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("添加映射")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -245,47 +156,27 @@ struct AddMappingSheet: View {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { save() }
+                    Button("保存") { save() }.disabled(validation != nil)
                         .accessibilityIdentifier("portmap.save")
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.large])
     }
 
-    /// §7.1 校验:名称非空;端口为 1–65535 数字;目标地址非空。
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var host: String { targetAddress.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var validation: String? {
+        if !(1...64).contains(trimmedName.count) { return "请输入 1–64 个字符的规则名称。" }
+        if (UInt16(localPort) ?? 0) == 0 { return "本地端口须为 1–65535。" }
+        if host.isEmpty || host.contains(where: { $0.isWhitespace || "/?#@".contains($0) }) { return "请输入目标主机，不含协议或路径。" }
+        if (UInt16(targetPort) ?? 0) == 0 { return "目标端口须为 1–65535。" }
+        return nil
+    }
+
     private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty, trimmedName.count <= 64 else {
-            error = "名称需为 1–64 个字符"
-            return
-        }
-        guard validPort(localPort) else {
-            error = "端口需为 1–65535 的整数"
-            return
-        }
-        if targetAddress.trimmingCharacters(in: .whitespaces).isEmpty {
-            error = "目标地址不能为空"
-            return
-        }
-        guard validPort(targetPort) else {
-            error = "端口需为 1–65535 的整数"
-            return
-        }
-        onSave(PortMapping(
-            id: UUID().uuidString,
-            name: trimmedName,
-            localPort: localPort,
-            targetAddress: targetAddress,
-            targetPort: targetPort,
-            status: .connecting,
-            enabled: true
-        ))
-        dismiss()
-    }
-
-    private func validPort(_ string: String) -> Bool {
-        guard let port = Int(string), (1...65535).contains(port) else { return false }
-        return true
+        guard validation == nil, let local = UInt16(localPort), let remote = UInt16(targetPort) else { return }
+        error = onSave(PortMapping(name: trimmedName, localPort: local, targetAddress: host, targetPort: remote))
+        if error == nil { dismiss() }
     }
 }

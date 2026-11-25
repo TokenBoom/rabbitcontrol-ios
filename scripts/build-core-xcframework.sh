@@ -11,72 +11,13 @@
 #
 # 产物:
 #   Vendor/RabbitControlCore.xcframework  —— 直接在 project.yml 中链接;
-#   头文件与 modulemap 在 Vendor/include/,会被复制进 xcframework 各切片。
+#   各切片的头文件与 modulemap 来自 Apple Media 仓的 include/。
 set -euo pipefail
 
 IOS_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MEDIA_DIR="${RC_MEDIA_DIR:-$IOS_REPO/../rabbitcontrol-apple-media}"
-TARGETS="${RC_TARGETS:-aarch64-apple-ios aarch64-apple-ios-sim}"
-OUT_DIR="$IOS_REPO/Vendor"
-XCFW_DIR="$OUT_DIR/RabbitControlCore.xcframework"
-CRATE=rc-mobile-ffi
-
-if [[ ! -f "$MEDIA_DIR/crates/rc-mobile-ffi/Cargo.toml" ]]; then
-    echo "error: $MEDIA_DIR 不是包含 crates/rc-mobile-ffi 的 rabbitcontrol-apple-media 检出" >&2
-    echo "       克隆 rabbitcontrol-apple-media 到与本仓库并列的目录,或设置 RC_MEDIA_DIR" >&2
+if [[ ! -x "$MEDIA_DIR/scripts/build-xcframework.sh" ]]; then
+    echo "error: 缺少 rabbitcontrol-apple-media 构建脚本: $MEDIA_DIR" >&2
     exit 1
 fi
-
-# rustup 经 Homebrew 安装时 cargo/rustc 不在 PATH,补上 toolchain bin
-if ! command -v cargo >/dev/null 2>&1; then
-    # uname 报 arm64,rustup toolchain 目录用 aarch64
-    arch="$(uname -m)"
-    [[ "$arch" == "arm64" ]] && arch="aarch64"
-    TC="$HOME/.rustup/toolchains/stable-$arch-apple-darwin/bin"
-    if [[ -x "$TC/cargo" ]]; then
-        export PATH="$TC:$PATH"
-    fi
-fi
-
-echo "==> media 检出: $MEDIA_DIR"
-
-# Apple 媒体库(VT 解码+帧泵渲染),与 FFI 同仓
-MEDIA_CRATE=rc-media-apple
-media_lib_name="lib${MEDIA_CRATE//-/_}.a"
-
-libs=()
-for target in $TARGETS; do
-    echo "==> cargo build --release -p $CRATE --target $target"
-    (cd "$MEDIA_DIR" && cargo build --release -p "$CRATE" --target "$target")
-    core_lib="$MEDIA_DIR/target/$target/release/lib${CRATE//-/_}.a"
-
-    if [[ -f "$MEDIA_DIR/crates/rc-media-apple/Cargo.toml" ]]; then
-        echo "==> cargo build --release -p $MEDIA_CRATE --target $target"
-        (cd "$MEDIA_DIR" && cargo build --release -p "$MEDIA_CRATE" --target "$target")
-        # 合并两个静态库为单一 archive,保持 Xcode 侧单 xcframework 链接
-        merged="$(dirname "$core_lib")/librabbitcontrol_combined.a"
-        libtool -static -o "$merged" "$core_lib" "$MEDIA_DIR/target/$target/release/$media_lib_name"
-        libs+=("$merged")
-    else
-        echo "warning: 未找到 rabbitcontrol-apple-media($MEDIA_DIR),视频通路不可用" >&2
-        libs+=("$core_lib")
-    fi
-done
-
-rm -rf "$XCFW_DIR"
-
-args=()
-for lib in "${libs[@]}"; do
-    # 每个切片需要自己的 headers 副本(xcodebuild 要求)
-    slice_id="$(basename "$(dirname "$(dirname "$lib")")")"
-    hdr_dir="$(mktemp -d)/headers-$slice_id"
-    mkdir -p "$hdr_dir"
-    cp "$OUT_DIR/include/rabbitcontrol_core.h" "$OUT_DIR/include/module.modulemap" "$hdr_dir/"
-    args+=(-library "$lib" -headers "$hdr_dir")
-done
-
-echo "==> xcodebuild -create-xcframework"
-xcodebuild -create-xcframework "${args[@]}" -output "$XCFW_DIR"
-
-echo "==> 完成: $XCFW_DIR"
-ls "$XCFW_DIR"
+exec "$MEDIA_DIR/scripts/build-xcframework.sh" "$IOS_REPO/Vendor"

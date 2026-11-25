@@ -5,27 +5,15 @@ struct DeviceDetailView: View {
     var device: Device
 
     @State private var sessionMode: SessionMode?
-    @State private var tool: Tool?
+    @State private var actionError: String?
+    @State private var saving = false
+    private var account: AccountDevice? { AuthService.shared.devices.first { $0.deviceID == device.id } }
+    private var online: Bool { account?.online ?? false }
+    private var canConnect: Bool { account.map { $0.online && !$0.disabled && $0.allowRemoteAssist } ?? false }
     @State private var showRename = false
     @State private var showRemoveConfirm = false
     @State private var renameText = ""
     @Environment(\.dismiss) private var dismiss
-
-    enum Tool: String, Identifiable {
-        case fileTransfer = "文件传输"
-        case terminal = "终端"
-        case portMapping = "端口映射"
-
-        var id: String { rawValue }
-
-        var icon: String {
-            switch self {
-            case .fileTransfer: "folder"
-            case .terminal: "terminal"
-            case .portMapping: "network"
-            }
-        }
-    }
 
     enum SessionMode: Identifiable {
         case control
@@ -39,16 +27,24 @@ struct DeviceDetailView: View {
         }
     }
 
+    private var connectionHint: String {
+        guard let account else { return "设备已不在当前账号中，请返回设备列表。" }
+        if account.disabled { return "设备已被停用，暂时无法连接。" }
+        if !account.online { return "设备离线。请在对方设备上打开 RabbitControl 并检查网络，下拉可刷新状态。" }
+        if !account.allowRemoteAssist { return "请先在对方设备上允许远程协助。" }
+        return "控制模式支持键鼠与远程工具；仅查看不会发送操作。"
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
                 // 预览卡
-                WallpaperView(wallpaper: device.wallpaper)
+                DevicePreview(device: device, showsCaption: online)
                     .frame(maxWidth: .infinity)
                     .aspectRatio(16.0 / 10.0, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay {
-                        if !device.online {
+                        if !online {
                             RoundedRectangle(cornerRadius: 12)
                                 .fill(.black.opacity(0.45))
                             Text("设备离线")
@@ -61,12 +57,25 @@ struct DeviceDetailView: View {
                 // 状态行
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(device.online ? RCColor.online : RCColor.textDisabled)
+                        .fill(online ? RCColor.online : RCColor.textDisabled)
                         .frame(width: 8, height: 8)
-                    Text(device.online ? "在线" : "离线")
+                    Text(online ? "在线" : "离线")
                         .font(.system(size: 14))
                         .foregroundStyle(RCColor.textSecondary)
                     Spacer()
+                    Button {
+                        UIPasteboard.general.string = device.id.filter { !$0.isWhitespace }
+                        ToastCenter.shared.show("已复制设备 ID")
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("ID  \(device.displayID)").font(.subheadline.monospacedDigit())
+                            RabbitIcon(.clipboard, size: 15)
+                        }
+                        .foregroundStyle(.secondary).frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("复制设备 ID \(device.displayID)")
+                    .accessibilityIdentifier("detail.copyID")
                 }
                 .padding(.horizontal, 20)
 
@@ -77,75 +86,68 @@ struct DeviceDetailView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Text("进入桌面")
-                                .font(.system(size: 16, weight: .semibold))
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.headline)
+                            RabbitIcon(.arrowRight, size: 16)
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 48)
+                        .frame(minHeight: 48)
                         .background(
-                            device.online ? RCColor.accent : RCColor.stroke,
+                            canConnect ? RCColor.accent : RCColor.stroke,
                             in: RoundedRectangle(cornerRadius: 10)
                         )
                     }
-                    .disabled(!device.online)
+                    .disabled(!canConnect)
                     .accessibilityIdentifier("detail.enterDesktop")
 
                     Button {
                         sessionMode = .watch
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: "play.square")
-                            Text("观看模式")
+                            RabbitIcon(.watchScreen, size: 20)
+                            Text("查看设备屏幕（只读）")
                         }
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textDisabled)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(canConnect ? RCColor.textPrimary : RCColor.textDisabled)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 10))
+                        .frame(minHeight: 48)
+                        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 10))
                         .overlay {
                             RoundedRectangle(cornerRadius: 10)
                                 .strokeBorder(RCColor.stroke, lineWidth: 1)
                         }
                     }
-                    .disabled(!device.online)
+                    .disabled(!canConnect)
                     .accessibilityIdentifier("detail.watchMode")
                 }
                 .padding(.horizontal, 16)
 
-                // 工具入口(O1 工具项的移动端入口)
-                VStack(spacing: 0) {
-                    toolRow(.fileTransfer)
-                    divider
-                    toolRow(.terminal)
-                    divider
-                    toolRow(.portMapping)
-                }
-                .background(.white, in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal, 16)
+                Text(connectionHint)
+                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
+
             }
             .padding(.top, 8)
         }
         .background(RCColor.bgPage)
+        .refreshable { await AuthService.shared.refreshDevices() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
-                        renameText = device.name
+                        renameText = account?.displayName ?? device.name
                         showRename = true
                     } label: {
-                        Label("重命名", systemImage: "pencil")
+                        Label("重命名", rabbitIcon: .pencil)
                     }
                     Button(role: .destructive) {
                         showRemoveConfirm = true
                     } label: {
-                        Label("解绑设备", systemImage: "trash")
+                        Label("解绑设备", rabbitIcon: .trash)
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    RabbitIcon(.ellipsis, size: 22)
                 }
-                .accessibilityIdentifier("device.menu")
+                .accessibilityLabel("管理设备").accessibilityIdentifier("device.menu")
             }
         }
         .alert("重命名设备", isPresented: $showRename) {
@@ -153,69 +155,36 @@ struct DeviceDetailView: View {
             Button("取消", role: .cancel) {}
             Button("确定") {
                 Task {
-                    try? await AuthService.shared.renameDevice(deviceID: device.id, alias: renameText)
+                    saving = true
+                    defer { saving = false }
+                    do { try await AuthService.shared.renameDevice(deviceID: device.id, alias: renameText.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    catch { actionError = error.localizedDescription }
                 }
-            }
+            }.disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .alert("解绑该设备?", isPresented: $showRemoveConfirm) {
             Button("取消", role: .cancel) {}
             Button("解绑", role: .destructive) {
                 Task {
-                    try? await AuthService.shared.removeDevice(deviceID: device.id)
-                    dismiss()
+                    saving = true
+                    defer { saving = false }
+                    do { try await AuthService.shared.removeDevice(deviceID: device.id); dismiss() }
+                    catch { actionError = error.localizedDescription }
                 }
             }
         } message: {
-            Text("解绑后该设备将从你的账号中移除")
+            Text("“\(account?.displayName ?? device.name)”将从当前账号移除。")
         }
-        .navigationTitle(device.name)
-        .onAppear { AppChrome.shared.tabBarHidden = true }
-        .onDisappear { AppChrome.shared.tabBarHidden = false }
+        .navigationTitle(account?.displayName ?? device.name)
 
-        .fullScreenCover(item: $sessionMode) { mode in
+        .disabled(saving)
+        .overlay { if saving { ProgressView("正在保存…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .alert("操作未完成", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            Button("好") { actionError = nil }
+        } message: { Text(actionError ?? "") }
+        .accessibilityHidden(sessionMode != nil)
+        .fullScreenCover(item: $sessionMode, onDismiss: SessionService.shared.close) { mode in
             SessionView(device: device, mode: mode)
         }
-        .navigationDestination(item: $tool) { tool in
-            switch tool {
-            case .fileTransfer:
-                FileTransferView(device: device)
-            case .terminal:
-                TerminalView()
-            case .portMapping:
-                PortMappingView(device: device)
-            }
-        }
-    }
-
-    private var divider: some View {
-        RCColor.divider
-            .frame(height: 1)
-            .padding(.leading, 56)
-    }
-
-    private func toolRow(_ tool: Tool) -> some View {
-        Button {
-            self.tool = tool
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: tool.icon)
-                    .font(.system(size: 17))
-                    .foregroundStyle(device.online ? RCColor.accent : RCColor.textDisabled)
-                    .frame(width: 24)
-                Text(tool.rawValue)
-                    .font(.system(size: 14))
-                    .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textDisabled)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
-                    .foregroundStyle(RCColor.textDisabled)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 48)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!device.online)
-        .accessibilityIdentifier("detail.tool.\(tool.rawValue)")
     }
 }

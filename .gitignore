@@ -1,5 +1,6 @@
 # RabbitControlIOS.xcodeproj 由 project.yml 生成，不纳入版本控制
 *.xcodeproj
+Generated/AppInfo.plist
 
 DerivedData/
 *.xcresult/

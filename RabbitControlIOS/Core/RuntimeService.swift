@@ -18,94 +18,62 @@ final class RuntimeService {
 
     // MARK: - 初始化与信令生命周期
 
-    /// 幂等初始化。serverHost 与 AuthService 的服务器配置保持一致。
-    func boot(serverHost: String, useHTTPS: Bool) {
-        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+    private let queue = DispatchQueue(label: "rabbitcontrol.auth.runtime", qos: .userInitiated)
+    private var generation = 0
+
+    func sync(_ session: AuthService.Session?, target: AuthService.ServerTarget, rebuild: Bool = false) {
+        guard !AuthService.uiTestingMock else { return }
+        generation += 1
+        let revision = generation
+        if rebuild { initialized = false; signalRunning = false; deviceID = nil }
+        guard var dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("runtime", isDirectory: true) else { return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        var dict: [String: Any] = [
-            "server_host": serverHost,
-            "use_https": useHTTPS,
-            "data_dir": dir.path,
-        ]
-        if let ca = AuthService.shared.serverTarget.caCertPem {
-            dict["ca_cert_pem"] = ca
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try dir.setResourceValues(values)
+        } catch { lastError = "无法准备设备身份存储"; return }
+        var config = target.payload
+        config["data_dir"] = dir.path
+        config["external_auth"] = true
+        let initJSON = rebuild || !initialized ? Self.jsonString(config) : nil
+        let tokenJSON: String? = session.flatMap { s in
+            guard let user = s.userID, let expiry = s.expiresAt, expiry > Date.now.timeIntervalSince1970 + 180,
+                  s.matches(target) else { return nil }
+            return Self.jsonString(["user_id": user, "email": s.email, "display_name": s.displayName,
+                "must_change_password": s.mustChangePassword ?? false, "access_token": s.accessToken,
+                "refresh_token": "", "access_expires_at_unix_sec": UInt64(expiry),
+                "server_host": target.host, "api_port": target.effectiveAPIPort])
         }
-        let payload = Self.jsonString(dict)
-        guard let payload else { return }
-        if let resp = Self.callSyncJSON(payload, rc_runtime_init),
-           resp["error"] == nil {
-            initialized = true
-        } else {
-            lastError = "运行时初始化失败"
-        }
-    }
-
-    /// 登录后调用:绑定设备 + 签发证书 + 拉起信令。
-    /// 与 AuthService 平行的 runtime 内登录(信令/免密票据体系依赖 runtime 自己的会话)。
-    func login(email: String, password: String) {
-        // 登录必然刚走过当前 serverTarget 的 TLS/CA 链,以最晚配置重建 runtime,
-        // 避免 App 启动时 caCertPem/useHTTPS 尚未就绪导致的信令 TLS 静默失败。
-        let target = AuthService.shared.serverTarget
-        initialized = false
-        boot(serverHost: target.host, useHTTPS: target.useHTTPS)
-        guard initialized else { return }
-        guard let payload = Self.jsonString(["email": email, "password": password]) else { return }
-        if let resp = Self.callSyncJSON(payload, rc_runtime_login), resp["error"] == nil {
-            startSignal()
-            writeSignalDiagnostics()
-        }
-    }
-
-    /// App 启动时:runtime 会话若已从磁盘恢复则直接拉信令。
-    func restoreAndStartSignal() {
-        guard initialized, !signalRunning else { return }
-        if let s = Self.callSync({ rc_runtime_status() }),
-           let data = s.data(using: .utf8),
-           let resp = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           resp["logged_in"] as? Bool == true {
-            startSignal()
+        let startJSON = signalRunning && initJSON == nil ? nil : Self.jsonString(["hostname": UIDevice.current.name, "os": "ios"])
+        queue.async {
+            var ready = true
+            var error: String?
+            var id: String?
+            if let initJSON { let r = Self.callSyncJSON(initJSON, rc_runtime_init); ready = r?["device_pubkey_hex"] is String }
+            if ready, let tokenJSON {
+                let adopted = Self.callSyncJSON(tokenJSON, rc_runtime_set_session)
+                if adopted?["ok"] as? Bool != true { error = "信令登录状态不可用" }
+                else if let startJSON {
+                    let r = Self.callSyncJSON(startJSON, rc_signal_start)
+                    id = r?["device_id"] as? String
+                    if id == nil { error = r?["error"] as? String ?? "信令启动失败" }
+                }
+            }
+            Task { @MainActor [ready, id, error] in
+                guard revision == self.generation else { return }
+                self.initialized = ready
+                self.lastError = ready ? error : "设备身份初始化失败"
+                if startJSON != nil { self.deviceID = id; self.signalRunning = id != nil }
+            }
         }
     }
 
     func logout() {
-        stopSignal()
-        _ = Self.callSync({ rc_runtime_logout() })
-    }
-
-    func startSignal() {
-        guard initialized, !signalRunning else { return }
-        let host = UIDevice.current.name
-        guard let payload = Self.jsonString(["hostname": host, "os": "ios"]) else { return }
-        if let resp = Self.callSyncJSON(payload, rc_signal_start) {
-            if let err = resp["error"] as? String {
-                lastError = err
-                return
-            }
-            deviceID = resp["device_id"] as? String
-            signalRunning = true
-            lastError = nil
-        }
-    }
-
-    /// 诊断:把 rc_signal_status 连续采样写入 Documents/signal-status.txt。
-    func writeSignalDiagnostics() {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let url = docs.appendingPathComponent("signal-status.txt")
-        var lines = ""
-        for _ in 0..<6 {
-            if let s = Self.callSync({ rc_signal_status(nil) }) {
-                lines += s + "\n"
-            }
-            Thread.sleep(forTimeInterval: 2)
-        }
-        try? lines.write(to: url, atomically: true, encoding: .utf8)
-    }
-
-    func stopSignal() {
-        guard signalRunning else { return }
-        _ = Self.callSync(rc_signal_stop)
-        signalRunning = false
+        generation += 1
+        initialized = false; signalRunning = false; deviceID = nil; lastError = nil
+        queue.async { _ = Self.callSync(rc_signal_stop); _ = Self.callSync(rc_runtime_logout) }
     }
 
     // MARK: - 一键连接
@@ -139,7 +107,10 @@ final class RuntimeService {
         guard let payload = jsonString(dict) else {
             throw AuthService.AuthError.badResponse
         }
-        guard let resp = callSyncJSON(payload, rc_runtime_connect) else {
+        let raw = await Task.detached(priority: .userInitiated) {
+            payload.withCString { ptr in Self.callSync { rc_runtime_connect(ptr) } }
+        }.value
+        guard let raw, let resp = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
             throw AuthService.AuthError.noResponse
         }
         if let err = resp["error"] as? String {

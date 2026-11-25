@@ -27,6 +27,11 @@ targets:
   RabbitControlIOS:
     type: application
     platform: iOS
+    info:
+      path: Generated/AppInfo.plist
+      properties:
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     sources:
       - path: RabbitControlIOS
         type: syncedFolder
@@ -36,6 +41,7 @@ targets:
         embed: false
       # VideoToolbox 解码链路依赖的系统框架(rc-decode-vt 手工 FFI)
       - sdk: VideoToolbox.framework
+      - sdk: AudioToolbox.framework
       - sdk: CoreMedia.framework
       - sdk: CoreVideo.framework
     settings:
@@ -43,7 +49,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios
         CODE_SIGN_ENTITLEMENTS: RabbitControlIOS/RabbitControlIOS.entitlements
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        # 不单独维护 Info.plist，由下列构建设置生成
+        # Xcode 将构建设置与上方 info.properties 合并为最终 Info.plist。
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_CFBundleDisplayName: RabbitControl
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
