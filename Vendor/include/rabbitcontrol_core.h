@@ -76,6 +76,19 @@ char *rc_session_input(const char *json);
 /// 关闭会话:{"session_id": N}
 char *rc_session_close(const char *json);
 
+// ── 视频通路 ──
+
+/// 注册 iOS 媒体通路(VT 解码器+帧泵渲染器),幂等,返回 1 成功。
+/// rc_session_open 内部会自动调用,通常无需手动调。
+int rc_video_init(void);
+
+/// 取走最新帧(所有权转移):{"ptr": u64, "width", "height", "seq"},无帧返回 {}。
+/// ptr 即 CVPixelBufferRef;用毕必须调 rc_video_frame_release。
+char *rc_video_frame_take(void);
+
+/// 释放帧(仅限 rc_video_frame_take 取走的 ptr,每帧一次)。
+void rc_video_frame_release(unsigned long long ptr);
+
 #ifdef __cplusplus
 }
 #endif
