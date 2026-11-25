@@ -59,6 +59,30 @@ struct MetalVideoViewTests {
     }
 
     @MainActor
+    @Test("竖屏与横屏在 1x 与放大平移下，触控映射与渲染矩形严格一致")
+    func touchMappingMatchesRenderedRect() {
+        let cases: [(CGSize, CGFloat, CGPoint)] = [
+            (CGSize(width: 393, height: 852), 1.0, .zero),
+            (CGSize(width: 393, height: 852), 2.5, CGPoint(x: 120, y: -80)),
+            (CGSize(width: 852, height: 393), 1.0, .zero),
+            (CGSize(width: 852, height: 393), 3.0, CGPoint(x: -240, y: 150)),
+        ]
+        for (viewport, scale, pan) in cases {
+            let zoom = ZoomPanState()
+            zoom.videoSize = CGSize(width: 2560, height: 1600)
+            zoom.scale = scale
+            zoom.pan = pan
+            let rect = zoom.videoRect(in: viewport)
+            for (ux, uy) in [(0.0, 0.0), (0.25, 0.75), (0.5, 0.5), (1.0, 1.0)] {
+                let viewPt = CGPoint(x: rect.minX + rect.width * ux, y: rect.minY + rect.height * uy)
+                let mapped = zoom.normalizedPoint(for: viewPt, in: viewport)
+                #expect(abs(mapped.x - ux) < 1e-6)
+                #expect(abs(mapped.y - uy) < 1e-6)
+            }
+        }
+    }
+
+    @MainActor
     @Test("SwiftUI 重建视图值后，原 Metal 视图仍由同一渲染器取帧")
     func rendererSurvivesViewUpdate() throws {
         let zoomPan = ZoomPanState()

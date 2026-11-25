@@ -37,8 +37,6 @@ struct SessionControlHub: View {
                                 Slider(value: $input.pointerSensitivity, in: 0.5...2.5, step: 0.05)
                                 Text(String(format: "%.2fx", input.pointerSensitivity)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                             }
-                        } else {
-                            Toggle(isOn: $input.directTouchOffset) { Label("直点指尖微偏置", rabbitIcon: .cursor) }
                         }
                         Toggle(isOn: $input.naturalScroll) { Label("自然滚动方向", rabbitIcon: .arrowDown) }
                         Toggle(isOn: $showMouseTools) { Label("在桌面上显示鼠标工具", rabbitIcon: .mouse) }

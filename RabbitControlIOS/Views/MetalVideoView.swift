@@ -38,6 +38,14 @@ import RabbitControlCore
         scale = 1
         pan = .zero
     }
+
+    /// 将视图坐标按当前缩放/平移后的视频矩形反算为 [0, 1] 归一化坐标。
+    func normalizedPoint(for viewPoint: CGPoint, in viewportSize: CGSize) -> CGPoint {
+        let rect = videoRect(in: viewportSize)
+        let nx = (viewPoint.x - rect.minX) / max(rect.width, 1)
+        let ny = (viewPoint.y - rect.minY) / max(rect.height, 1)
+        return CGPoint(x: min(max(nx, 0), 1), y: min(max(ny, 0), 1))
+    }
 }
 
 final class MetalVideoRenderer: NSObject, MTKViewDelegate {

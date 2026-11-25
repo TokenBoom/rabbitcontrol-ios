@@ -9,7 +9,6 @@ final class TouchInputUIView: UIView {
     var inputMode: TouchInputMode = .directTouch
     var sensitivity: CGFloat = 1.15
     var naturalScroll = true
-    var directTouchOffset = true
     var watchOnly = false {
         didSet { if watchOnly { cancelAll() } }
     }
@@ -61,7 +60,6 @@ final class TouchInputUIView: UIView {
     private let doubleTapWindow: TimeInterval = 0.3
     private let longPressDelay: TimeInterval = 0.55
     private let scrollNotch: CGFloat = 34           // 每多少点滚动换算一格滚轮
-    private let fingertipOffsetY: CGFloat = 46
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -77,12 +75,7 @@ final class TouchInputUIView: UIView {
     /// 视图坐标 → 远端归一化坐标(直触:按缩放/平移反算;触控板:虚拟光标)。
     private func normalized(for point: CGPoint) -> CGPoint {
         guard let zoomPan, viewportSize.width > 0 else { return cursor }
-        let rect = zoomPan.videoRect(in: viewportSize)
-        var p = point
-        if directTouchOffset && inputMode == .directTouch { p.y -= fingertipOffsetY }
-        let nx = (p.x - rect.minX) / max(rect.width, 1)
-        let ny = (p.y - rect.minY) / max(rect.height, 1)
-        return CGPoint(x: min(max(nx, 0), 1), y: min(max(ny, 0), 1))
+        return zoomPan.normalizedPoint(for: point, in: viewportSize)
     }
 
     private func sendMove(_ p: CGPoint) {
@@ -381,7 +374,6 @@ struct TouchInputView: UIViewRepresentable {
         view.inputMode = trackpadOnly ? .trackpad : prefs.touchMode
         view.sensitivity = prefs.pointerSensitivity
         view.naturalScroll = prefs.naturalScroll
-        view.directTouchOffset = prefs.directTouchOffset
         view.watchOnly = watchOnly
         view.trackpadOnly = trackpadOnly
         view.zoomPan = zoomPan

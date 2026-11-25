@@ -75,9 +75,6 @@ enum AppThemeMode: String, CaseIterable {
     var naturalScroll: Bool {
         didSet { defaults.set(naturalScroll, forKey: "rc.naturalScroll") }
     }
-    var directTouchOffset: Bool {
-        didSet { defaults.set(directTouchOffset, forKey: "rc.directTouchOffset") }
-    }
     var orientation: SessionOrientation {
         didSet { defaults.set(orientation.rawValue, forKey: "rc.orientation") }
     }
@@ -113,7 +110,6 @@ enum AppThemeMode: String, CaseIterable {
         touchMode = TouchInputMode(rawValue: d.string(forKey: "rc.touchMode") ?? "") ?? .directTouch
         pointerSensitivity = d.object(forKey: "rc.pointerSensitivity") == nil ? 1.15 : d.double(forKey: "rc.pointerSensitivity")
         naturalScroll = d.object(forKey: "rc.naturalScroll") == nil ? true : d.bool(forKey: "rc.naturalScroll")
-        directTouchOffset = d.object(forKey: "rc.directTouchOffset") == nil ? false : d.bool(forKey: "rc.directTouchOffset")
         orientation = SessionOrientation(rawValue: d.string(forKey: "rc.orientation") ?? "") ?? .auto
         portraitLayout = PortraitLayout(rawValue: d.string(forKey: "rc.portraitLayout") ?? "") ?? .auto
         keyboardBarVisible = d.object(forKey: "rc.keyboardBarVisible") == nil ? false : d.bool(forKey: "rc.keyboardBarVisible")

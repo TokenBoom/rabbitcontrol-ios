@@ -37,7 +37,6 @@ struct SettingsView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Toggle("直点指尖微偏置", isOn: $input.directTouchOffset)
                 Toggle("自然滚动方向", isOn: $input.naturalScroll)
             } header: { Text("操控与屏幕") }
 
