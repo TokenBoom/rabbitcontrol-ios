@@ -65,6 +65,18 @@ struct RemoteVideoView: View {
     }
 
     /// 拖拽:起点按下左键,移动上报归一化坐标,抬起释放。
+    /// 视频在视图内的 aspect-fit 显示矩形(与 MetalVideoView 视口计算一致);
+    /// 视频尺寸未知时退化为填满。
+    private func videoRect(in size: CGSize) -> CGRect {
+        let vw = CGFloat(session.width), vh = CGFloat(session.height)
+        guard vw > 0, vh > 0, size.width > 0, size.height > 0 else {
+            return CGRect(origin: .zero, size: size)
+        }
+        let scale = min(size.width / vw, size.height / vh)
+        let w = vw * scale, h = vh * scale
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+
     private func dragGesture(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
@@ -72,8 +84,9 @@ struct RemoteVideoView: View {
                     touchActive = true
                     session.sendMouseButton(button: "left", pressed: true)
                 }
-                let nx = value.location.x / max(size.width, 1)
-                let ny = value.location.y / max(size.height, 1)
+                let rect = videoRect(in: size)
+                let nx = (value.location.x - rect.minX) / max(rect.width, 1)
+                let ny = (value.location.y - rect.minY) / max(rect.height, 1)
                 session.sendMouseMove(nx: nx, ny: ny)
             }
             .onEnded { _ in

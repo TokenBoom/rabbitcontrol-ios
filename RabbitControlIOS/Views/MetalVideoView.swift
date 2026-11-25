@@ -135,6 +135,15 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
               let buf = commandQueue.makeCommandBuffer(),
               let enc = buf.makeRenderCommandEncoder(descriptor: pass) else { return }
 
+        // 竖屏等比适配:aspect-fit 视口居中,四周留黑边,不拉伸变形。
+        let dw = view.drawableSize.width, dh = view.drawableSize.height
+        if dw > 0, dh > 0, w > 0, h > 0 {
+            let scale = min(dw / CGFloat(w), dh / CGFloat(h))
+            let vpW = CGFloat(w) * scale, vpH = CGFloat(h) * scale
+            enc.setViewport(MTLViewport(
+                originX: Double((dw - vpW) / 2), originY: Double((dh - vpH) / 2),
+                width: Double(vpW), height: Double(vpH), znear: 0, zfar: 1))
+        }
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentTexture(texY, index: 0)
         enc.setFragmentTexture(texUV, index: 1)

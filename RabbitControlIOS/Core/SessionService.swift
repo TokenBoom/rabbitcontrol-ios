@@ -129,6 +129,17 @@ final class SessionService {
         }
     }
 
+    /// 协商后的视频尺寸(aspect-fit 布局/输入映射用);未协商为 0。
+    var width: Int {
+        if case .negotiated(let w, _, _, _, _) = state { return w }
+        return 0
+    }
+
+    var height: Int {
+        if case .negotiated(_, let h, _, _, _) = state { return h }
+        return 0
+    }
+
     private func applyUpdate(_ update: [String: Any]) {
         guard let kind = update["kind"] as? String else { return }
         let data = update["data"] as? [String: Any]
