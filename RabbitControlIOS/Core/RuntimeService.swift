@@ -74,9 +74,12 @@ final class RuntimeService {
                         password: String? = nil,
                         watchOnly: Bool = false,
                         lanDirectAddr: String? = nil) async throws -> ConnectResult {
+        let prefs = PrefsStore.shared
         var dict: [String: Any] = [
             "target_id": targetID,
             "watch_only": watchOnly,
+            "fps": prefs.effectiveFps,
+            "bitrate_bps": prefs.effectiveBitrateBps,
         ]
         if let password, !password.isEmpty { dict["password"] = password }
         if let lanDirectAddr { dict["lan_direct_addr"] = lanDirectAddr }

@@ -43,8 +43,6 @@ struct RemoteVideoView: View {
     var session: SessionService
     var onTapBackground: (() -> Void)?
 
-    @State private var frame: CGImage?
-    @State private var renderer = VideoFrameRenderer()
     /// 触控按下期间持续上报移动(模拟鼠标拖拽)。
     @State private var touchActive = false
 
@@ -52,20 +50,8 @@ struct RemoteVideoView: View {
         GeometryReader { geo in
             ZStack {
                 RCColor.stageBg
-                if let frame {
-                    Image(decorative: frame, scale: 1)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                            .tint(.white)
-                        Text(session.state.displayText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-            }
+                MetalVideoView()
+                            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(dragGesture(in: geo.size))
@@ -74,11 +60,6 @@ struct RemoteVideoView: View {
                 session.sendMouseButton(button: "left", pressed: true)
                 session.sendMouseButton(button: "left", pressed: false)
                 onTapBackground?()
-            }
-        }
-        .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
-            if let newFrame = renderer.renderLatest() {
-                frame = newFrame
             }
         }
     }

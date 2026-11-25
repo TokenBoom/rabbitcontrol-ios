@@ -55,8 +55,8 @@ final class SessionService {
         var payload: [String: Any] = [
             "connect_addr": connectAddr,
             "watch_only": watchOnly,
-            "fps": 30,
-            "bitrate_bps": 8_000_000,
+            "fps": PrefsStore.shared.effectiveFps,
+            "bitrate_bps": PrefsStore.shared.effectiveBitrateBps,
         ]
         if let password, !password.isEmpty {
             payload["password"] = password
