@@ -14,6 +14,7 @@ struct SessionView: View {
     @State private var quality = "超清 14M"
     @State private var frameRate = "144 帧"
     @State private var showSecurity = false
+    @State private var showControlHub = false
     @State private var session = SessionService.shared
 
     private var watchMode: Bool { mode == .watch }
@@ -105,6 +106,13 @@ struct SessionView: View {
             SecurityStatusView()
                 .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showControlHub) {
+            SessionControlHub(session: session, device: device) {
+                showControlHub = false
+                dismiss()
+            }
+            .presentationDetents([.medium, .large])
+        }
     }
 
     /// 账号设备(9 位设备码)且信令在线 → 一键连接(三阶路由+免密);
@@ -172,48 +180,10 @@ struct SessionView: View {
             .accessibilityIdentifier("session.timer")
 
             // 控制中心
-            Menu {
-                Button("切换下一个屏幕") {
-                    ToastCenter.shared.show("功能开发中")
-                }
-                Menu("画质") {
-                    ForEach(["自动", "原画 30M", "超清 14M", "高清 8M"], id: \.self) { option in
-                        Button {
-                            quality = option
-                            ToastCenter.shared.show("画质将在下次连接生效")
-                        } label: {
-                            if option == quality {
-                                Label(option, systemImage: "checkmark")
-                            } else {
-                                Text(option)
-                            }
-                        }
-                    }
-                    Divider()
-                    ForEach(["144 帧", "90 帧", "60 帧", "30 帧"], id: \.self) { option in
-                        Button {
-                            frameRate = option
-                            ToastCenter.shared.show("画质将在下次连接生效")
-                        } label: {
-                            if option == frameRate {
-                                Label(option, systemImage: "checkmark")
-                            } else {
-                                Text(option)
-                            }
-                        }
-                    }
-                }
-                Button("声音") { ToastCenter.shared.show("功能开发中") }
-                Button("外设") { ToastCenter.shared.show("功能开发中") }
-                Divider()
-                Button("退出远控", role: .destructive) {
-                    dismiss()
-                }
-                .accessibilityIdentifier("session.exit")
-            } label: {
+            Button { showControlHub = true } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "square.grid.2x2")
-                    Text("控制中心")
+                    Text("控制中枢")
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(RCColor.textPrimary)
