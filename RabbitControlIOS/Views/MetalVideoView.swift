@@ -4,6 +4,11 @@ import CoreVideo
 import SwiftUI
 import RabbitControlCore
 
+/// CoreVideo 像素缓冲是不可变引用类型,跨队列传递由底层引用计数保证生命周期。
+private nonisolated struct UncheckedSendable<Value>: @unchecked Sendable {
+    let value: Value
+}
+
 /// 缩放/平移共享状态:SwiftUI 手势层写入,Metal 渲染层与输入映射层读取。
 /// 1x 为等比铺满宽度；平移以视图中的点为单位。
 @Observable final class ZoomPanState {
@@ -90,10 +95,10 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
         if let newFrame = Self.takeLatestFrame() {
             if let id = previewDeviceID, ProcessInfo.processInfo.systemUptime >= previewAt {
                 previewAt = ProcessInfo.processInfo.systemUptime + 15
-                let frameCopy = newFrame
+                let frameCopy = UncheckedSendable(value: newFrame)
                 let context = previewContext
                 Self.previewQueue.async {
-                    let image = CIImage(cvPixelBuffer: frameCopy)
+                    let image = CIImage(cvPixelBuffer: frameCopy.value)
                     let maxDim = max(image.extent.width, image.extent.height)
                     let scale = min(1, 1080 / max(maxDim, 1))
                     let output: CIImage
