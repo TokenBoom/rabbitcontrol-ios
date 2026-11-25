@@ -32,6 +32,8 @@ targets:
       properties:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        # 仅用标准 TLS(mTLS/HTTPS),声明豁免加密,TestFlight 免人工合规确认
+        ITSAppUsesNonExemptEncryption: false
     sources:
       - path: RabbitControlIOS
         type: syncedFolder
