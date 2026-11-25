@@ -104,6 +104,7 @@ char *rc_runtime_login(const char *json);
 char *rc_runtime_status(void);
 char *rc_runtime_logout(void);
 char *rc_signal_start(const char *json);
+char *rc_signal_status(const char *json);
 char *rc_signal_stop(void);
 char *rc_runtime_connect(const char *json);
 

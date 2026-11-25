@@ -53,6 +53,7 @@ final class RuntimeService {
         guard let payload = Self.jsonString(["email": email, "password": password]) else { return }
         if let resp = Self.callSyncJSON(payload, rc_runtime_login), resp["error"] == nil {
             startSignal()
+            writeSignalDiagnostics()
         }
     }
 
@@ -85,6 +86,20 @@ final class RuntimeService {
             signalRunning = true
             lastError = nil
         }
+    }
+
+    /// 诊断:把 rc_signal_status 连续采样写入 Documents/signal-status.txt。
+    func writeSignalDiagnostics() {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let url = docs.appendingPathComponent("signal-status.txt")
+        var lines = ""
+        for _ in 0..<6 {
+            if let s = Self.callSync({ rc_signal_status(nil) }) {
+                lines += s + "\n"
+            }
+            Thread.sleep(forTimeInterval: 2)
+        }
+        try? lines.write(to: url, atomically: true, encoding: .utf8)
     }
 
     func stopSignal() {
