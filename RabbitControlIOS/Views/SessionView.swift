@@ -71,7 +71,7 @@ struct SessionView: View {
 
             // HUD(右下角常驻)
             if hudVisible {
-                SessionHUD(startedAt: startedAt)
+                SessionHUD(startedAt: startedAt, hud: session.hud)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(.trailing, 16)
                     .padding(.bottom, 32)
@@ -240,6 +240,17 @@ struct SessionView: View {
 /// S4 HUD:静态 mock 链路数据,字段与 `LoopbackReport` 语义对齐,后续接真数据。
 struct SessionHUD: View {
     var startedAt: Date
+    /// 真实链路统计(SessionUpdate.hud),无数据时各项显示 0。
+    var hud: [String: Any]?
+
+    private var resolutionLabel: String {
+        hud?["resolution"] as? String ?? "-"
+    }
+
+    private func fmt(_ value: Any?, digits: Int) -> String {
+        let number = (value as? NSNumber)?.doubleValue ?? 0
+        return String(format: "%.\(digits)f", number)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -248,13 +259,13 @@ struct SessionHUD: View {
                     .foregroundStyle(.white)
             }
             Group {
-                Text("UDP LAN")
-                Text("2 fps")
-                Text("227.2 Kbps")
-                Text("110 ms")
-                Text("20 ms frm.")
-                Text("0.0% loss")
-                Text("2K")
+                Text(hud?["transport"] as? String ?? "-")
+                Text("\(fmt(hud?["fps"], digits: 0)) fps")
+                Text("\(fmt(hud?["bitrate_kbps"], digits: 1)) Kbps")
+                Text("\(fmt(hud?["rtt_ms"], digits: 0)) ms")
+                Text("\(fmt(hud?["frame_ms"], digits: 0)) ms frm.")
+                Text("\(fmt(hud?["loss_pct"], digits: 1))% loss")
+                Text(resolutionLabel)
             }
             .foregroundStyle(Color(hex: 0x98989D))
         }
