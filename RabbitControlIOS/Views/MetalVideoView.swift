@@ -46,6 +46,25 @@ import RabbitControlCore
         let ny = (viewPoint.y - rect.minY) / max(rect.height, 1)
         return CGPoint(x: min(max(nx, 0), 1), y: min(max(ny, 0), 1))
     }
+
+    /// 按当前缩放与视口尺寸限制平移范围,避免拖动超过画面边缘后产生回拉死区。
+    func clampPan(in size: CGSize) {
+        guard videoSize.width > 0, videoSize.height > 0, size.width > 0, size.height > 0 else { return }
+        if scale <= 1 {
+            pan = .zero
+            return
+        }
+        let ratio = videoSize.width / videoSize.height
+        let baseWidth = min(size.width, size.height * ratio)
+        let width = baseWidth * scale
+        let height = width / ratio
+        let maxX = max(0, (width - size.width) / 2)
+        let maxY = max(0, (height - size.height) / 2)
+        pan = CGPoint(
+            x: min(maxX, max(-maxX, pan.x)),
+            y: min(maxY, max(-maxY, pan.y))
+        )
+    }
 }
 
 final class MetalVideoRenderer: NSObject, MTKViewDelegate {
@@ -65,15 +84,33 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+    private static let previewQueue = DispatchQueue(label: "com.rabbitcontrol.preview", qos: .utility)
+
     func draw(in view: MTKView) {
         if let newFrame = Self.takeLatestFrame() {
             if let id = previewDeviceID, ProcessInfo.processInfo.systemUptime >= previewAt {
                 previewAt = ProcessInfo.processInfo.systemUptime + 15
-                let image = CIImage(cvPixelBuffer: newFrame)
-                let scale = min(1, 240 / max(image.extent.width, image.extent.height))
-                let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                if let cg = previewContext.createCGImage(small, from: small.extent) {
-                    AuthService.shared.rememberPreview(UIImage(cgImage: cg), deviceID: id)
+                let frameCopy = newFrame
+                let context = previewContext
+                Self.previewQueue.async {
+                    let image = CIImage(cvPixelBuffer: frameCopy)
+                    let maxDim = max(image.extent.width, image.extent.height)
+                    let scale = min(1, 1080 / max(maxDim, 1))
+                    let output: CIImage
+                    if scale < 1 {
+                        output = image.applyingFilter("CILanczosScaleTransform", parameters: [
+                            kCIInputScaleKey: scale,
+                            kCIInputAspectRatioKey: 1.0,
+                        ])
+                    } else {
+                        output = image
+                    }
+                    if let cg = context.createCGImage(output, from: output.extent) {
+                        let uiImage = UIImage(cgImage: cg)
+                        Task { @MainActor in
+                            AuthService.shared.rememberPreview(uiImage, deviceID: id)
+                        }
+                    }
                 }
             }
             latestFrame = newFrame

@@ -18,7 +18,17 @@ struct DeviceListView: View {
 
     private var devices: [Device] {
         let nearbyIDs = lanDeviceIDs
-        return auth.devices.map { $0.card(nearbyIDs: nearbyIDs) }
+        let ownID = RuntimeService.shared.deviceID?.replacingOccurrences(of: " ", with: "")
+        return auth.devices
+            .filter { dev in
+                if dev.os.lowercased() == "ios" { return false }
+                if let ownID, !ownID.isEmpty,
+                   dev.deviceID.replacingOccurrences(of: " ", with: "") == ownID {
+                    return false
+                }
+                return true
+            }
+            .map { $0.card(nearbyIDs: nearbyIDs) }
     }
 
     private var onlineDevices: [Device] { devices.filter(\.online) }

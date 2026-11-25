@@ -4,7 +4,7 @@ import UIKit
 /// 精密触控输入层:原始多点触控事件驱动的手势状态机。
 /// - 触控板模式:单指相对移动(非线性加速)、轻点左键、二次触按拖动、双指轻点右键、
 ///   双指惯性滚动、三指拖动、双指捏合缩放。
-/// - 直触模式:绝对坐标映射+可选指尖偏置,拖动即左键拖拽,长按右键,双指滚动/缩放。
+/// - 直触模式:绝对坐标精确映射,单指拖动画布平移,双击后拖或三指拖动为左键拖拽,长按右键,双指滚动/缩放。
 final class TouchInputUIView: UIView {
     var inputMode: TouchInputMode = .directTouch
     var sensitivity: CGFloat = 1.15
@@ -27,7 +27,8 @@ final class TouchInputUIView: UIView {
         case trackpadMove          // 触控板相对移动
         case trackpadDrag          // 触控板按住拖动
         case directPending         // 直触按下,未越过阈值
-        case directDrag            // 直触拖拽(左键按住)
+        case directPan             // 直触单指拖动画布平移
+        case directDrag            // 直触左键拖拽(双击后拖)
         case twoFingerPending      // 双指刚落下,等待判定滚动/捏合/轻点
         case twoFingerScroll       // 双指滚动
         case pinchZoom             // 双指捏合缩放
@@ -200,21 +201,37 @@ final class TouchInputUIView: UIView {
             let p = touch.location(in: self)
             if hypot(p.x - downPoint.x, p.y - downPoint.y) > slop {
                 cancelLongPress()
-                phase = .directDrag
-                sendMove(normalized(for: p))
-                pressLeft(true)
+                // 轻点后紧接着再次触按拖动 → 远端左键拖拽；普通单指拖动 → 平移画布
+                if touch.timestamp - lastTapAt < doubleTapWindow {
+                    phase = .directDrag
+                    sendMove(normalized(for: p))
+                    pressLeft(true)
+                } else {
+                    phase = .directPan
+                }
                 lastPoint = p
+            }
+        case .directPan:
+            guard let touch = primary, touches.contains(touch), let zoomPan else { return }
+            let p = touch.location(in: self)
+            let dx = p.x - lastPoint.x
+            let dy = p.y - lastPoint.y
+            lastPoint = p
+            if zoomPan.scale > 1 {
+                zoomPan.pan = CGPoint(x: zoomPan.pan.x + dx, y: zoomPan.pan.y + dy)
+                zoomPan.clampPan(in: viewportSize)
             }
         case .directDrag:
             guard let touch = primary, touches.contains(touch) else { return }
             sendMove(normalized(for: touch.location(in: self)))
         case .twoFingerPending, .twoFingerScroll, .pinchZoom:
             guard count >= 2, let pair = twoCentroid(event) else { return }
-            let centerDelta = CGPoint(x: pair.center.x - twoLastCenter.x, y: pair.center.y - twoLastCenter.y)
+            let prevCenter = twoLastCenter
+            let centerDelta = CGPoint(x: pair.center.x - prevCenter.x, y: pair.center.y - prevCenter.y)
             twoLastCenter = pair.center
             let spanDelta = pair.span - twoStartSpan
             if phase == .twoFingerPending {
-                if !trackpadOnly, abs(spanDelta) > 12 {
+                if !trackpadOnly, abs(spanDelta) > 10 {
                     phase = .pinchZoom
                     twoMoved = true
                 } else if hypot(pair.center.x - twoStart.x, pair.center.y - twoStart.y) > slop {
@@ -223,10 +240,20 @@ final class TouchInputUIView: UIView {
                 }
             }
             if phase == .pinchZoom, let zoomPan {
-                zoomPan.scale = min(8, max(1, baseScale * pair.span / max(twoStartSpan, 1)))
-                if zoomPan.scale == 1 { zoomPan.pan = .zero }
-                else {
-                    zoomPan.pan = CGPoint(x: zoomPan.pan.x + centerDelta.x, y: zoomPan.pan.y + centerDelta.y)
+                let oldScale = max(zoomPan.scale, 1)
+                let newScale = min(8, max(1, baseScale * pair.span / max(twoStartSpan, 1)))
+                let factor = newScale / oldScale
+                zoomPan.scale = newScale
+                if newScale <= 1 {
+                    zoomPan.pan = .zero
+                } else {
+                    // 以双指中点为锚点缩放,并同步叠加双指平移
+                    let anchorX = prevCenter.x - viewportSize.width / 2
+                    let anchorY = prevCenter.y - viewportSize.height / 2
+                    let nextPanX = (zoomPan.pan.x - anchorX) * factor + anchorX + centerDelta.x
+                    let nextPanY = (zoomPan.pan.y - anchorY) * factor + anchorY + centerDelta.y
+                    zoomPan.pan = CGPoint(x: nextPanX, y: nextPanY)
+                    zoomPan.clampPan(in: viewportSize)
                 }
             } else if phase == .twoFingerScroll {
                 scrollAccum.x += centerDelta.x
@@ -254,8 +281,11 @@ final class TouchInputUIView: UIView {
             if let touch = primary, touch.timestamp - downAt < tapDuration {
                 sendMove(normalized(for: touch.location(in: self)))
                 click("left")
+                lastTapAt = touch.timestamp
             }
             phase = .idle
+        case .directPan:
+            phase = remaining > 0 ? phase : .idle
         case .trackpadMove:
             phase = remaining > 0 ? phase : .idle
         case .trackpadDrag, .directDrag, .threeFingerDrag:

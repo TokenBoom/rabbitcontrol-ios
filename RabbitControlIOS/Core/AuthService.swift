@@ -49,9 +49,14 @@ final class AuthService {
     }
 
     struct SavedServer: Codable, Hashable, Identifiable {
+        var name: String?
         var target: ServerTarget
         var email: String?
         var id: String { "\(target.host):\(target.effectiveAPIPort):\(target.useHTTPS)" }
+        var displayName: String {
+            let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? target.host : trimmed
+        }
     }
 
     /// 当前服务器配置;持久化于 UserDefaults,默认本机调试实例。
@@ -66,13 +71,33 @@ final class AuthService {
     /// 已保存的常用服务器(含各自最近登录邮箱),UserDefaults 持久化。
     private(set) var savedServers: [SavedServer] = []
 
-    func rememberServer(_ target: ServerTarget, email: String? = nil) {
+    func rememberServer(_ target: ServerTarget, email: String? = nil, name: String? = nil) {
         var list = savedServers
-        let entry = SavedServer(target: target, email: email ?? list.first(where: { $0.target == target })?.email)
+        let existing = list.first(where: { $0.target == target })
+        let entry = SavedServer(
+            name: name ?? existing?.name,
+            target: target,
+            email: email ?? existing?.email
+        )
         list.removeAll { $0.target == target }
         list.insert(entry, at: 0)
-        savedServers = Array(list.prefix(8))
+        savedServers = Array(list.prefix(12))
         persistServers()
+    }
+
+    func saveServer(name: String?, target: ServerTarget, replacing old: SavedServer? = nil) {
+        var list = savedServers
+        let existingEmail = old?.email ?? list.first(where: { $0.target == target })?.email
+        if let old { list.removeAll { $0.id == old.id } }
+        list.removeAll { $0.target == target }
+        let cleanName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = SavedServer(name: (cleanName?.isEmpty == false) ? cleanName : nil, target: target, email: existingEmail)
+        list.insert(entry, at: 0)
+        savedServers = Array(list.prefix(12))
+        persistServers()
+        if let old, old.target == serverTarget, !isLoggedIn {
+            serverTarget = target
+        }
     }
 
     func removeSavedServer(_ server: SavedServer) {

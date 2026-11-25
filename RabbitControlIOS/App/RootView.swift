@@ -32,35 +32,39 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 if auth.isLoggedIn, !AssistFlow.shared.sessionActive {
-                    HStack(spacing: 0) {
-                        homeAction("我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
-                        homeAction("远程协助", icon: .remoteAssist, selected: selection == .assist) { selection = .assist }
-                        homeAction("我的", icon: .person, selected: selection == .profile) { selection = .profile }
+                    HStack(spacing: 4) {
+                        homeAction("设备", id: "我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
+                        homeAction("协助", id: "远程协助", icon: .remoteAssist, selected: selection == .assist) { selection = .assist }
+                        homeAction("我的", id: "我的", icon: .person, selected: selection == .profile) { selection = .profile }
                     }
-                    .padding(6)
+                    .padding(4)
                     .background(.regularMaterial, in: Capsule())
-                    .frame(maxWidth: 520)
-                    .padding(.horizontal, 24)
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+                    .frame(maxWidth: 256)
+                    .padding(.top, 4)
+                    .padding(.bottom, 2)
                 }
             }
             .background(RCColor.bgPage.ignoresSafeArea())
         }
     }
 
-    private func homeAction(_ title: String, icon: RabbitIcon.Name, selected: Bool = false,
+    private func homeAction(_ title: String, id: String, icon: RabbitIcon.Name, selected: Bool = false,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                RabbitIcon(icon, size: 22)
-                Text(title).font(.caption)
+                RabbitIcon(icon, size: 20)
+                Text(title).font(.system(size: 11, weight: selected ? .semibold : .regular))
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .foregroundStyle(selected ? RCColor.accent : RCColor.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .foregroundStyle(selected ? RCColor.accent : RCColor.textSecondary)
             .background(selected ? RCColor.accent.opacity(0.12) : .clear, in: Capsule())
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(id)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("tab.\(title)")
+        .accessibilityIdentifier("tab.\(id)")
     }
 }

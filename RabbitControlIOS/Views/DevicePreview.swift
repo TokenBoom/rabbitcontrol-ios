@@ -7,7 +7,12 @@ struct DevicePreview: View {
         ZStack {
             Rectangle().fill(Color.secondary.opacity(0.12))
             if let image = AuthService.shared.previews[device.id] {
-                Image(uiImage: image).resizable().scaledToFit().accessibilityLabel("最近会话画面")
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .clipped()
+                    .accessibilityLabel("最近会话画面")
             } else {
                 VStack(spacing: 8) {
                     RabbitIcon(device.kind.icon, size: 28)

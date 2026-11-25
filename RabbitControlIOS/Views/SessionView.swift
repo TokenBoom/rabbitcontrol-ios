@@ -81,18 +81,23 @@ struct SessionView: View {
                 }
             } else if let failure {
                 ScrollView {
-                  VStack(spacing: 16) {
+                  VStack(spacing: verticalClass == .compact ? 10 : 16) {
                     Label("连接已结束", rabbitIcon: .sessionEnded).font(.headline)
                     Text(failure).font(.callout).multilineTextAlignment(.center).textSelection(.enabled)
-                    SecureField("远端连接密码（如需）", text: $retryPassword)
-                        .textContentType(.password).textFieldStyle(.roundedBorder)
-                        .submitLabel(.go).onSubmit { attempt += 1 }
-                        .foregroundStyle(.primary).frame(maxWidth: 320)
-                    Button("重新连接") { attempt += 1 }.buttonStyle(.borderedProminent)
-                    Button("返回") { dismiss() }
-                  }.frame(maxWidth: .infinity).padding(24).foregroundStyle(.white)
+                        .frame(maxWidth: 420)
+                    HStack(spacing: 10) {
+                        SecureField("远端连接密码（如需）", text: $retryPassword)
+                            .textContentType(.password).textFieldStyle(.roundedBorder)
+                            .submitLabel(.go).onSubmit { attempt += 1 }
+                            .foregroundStyle(.primary).frame(maxWidth: 280)
+                    }
+                    HStack(spacing: 14) {
+                        Button("重新连接") { attempt += 1 }.buttonStyle(.borderedProminent)
+                        Button("返回") { dismiss() }.buttonStyle(.bordered)
+                    }
+                  }.frame(maxWidth: .infinity).padding(verticalClass == .compact ? 16 : 24).foregroundStyle(.white)
                 }.scrollBounceBehavior(.basedOnSize).scrollDismissesKeyboard(.interactively)
-                    .safeAreaPadding(.top, 56)
+                    .safeAreaPadding(.top, verticalClass == .compact ? 24 : 56)
             } else if AuthService.uiTestingMock {
                 Text("会话预览").foregroundStyle(.white)
             } else {
@@ -105,19 +110,21 @@ struct SessionView: View {
         .overlay(alignment: .bottom) {
             if session.isConnected && !watchMode && !splitLayout {
                 SessionKeyboardBar(session: session, expanded: $keyboardBarExpanded)
-                    .safeAreaPadding(.bottom, 6)
+                    .safeAreaPadding(.bottom, verticalClass == .compact ? 4 : 6)
                     .onChange(of: keyboardBarExpanded) { InteractionPrefs.shared.keyboardBarVisible = keyboardBarExpanded }
             }
         }
         .overlay(alignment: inputPrefs.controlsLeading ? .topLeading : .topTrailing) {
-            VStack(alignment: inputPrefs.controlsLeading ? .leading : .trailing, spacing: 8) {
+            let isLandscape = verticalClass == .compact
+            let barHeight: CGFloat = isLandscape ? 34 : 40
+            VStack(alignment: inputPrefs.controlsLeading ? .leading : .trailing, spacing: isLandscape ? 4 : 8) {
                 if controlsCollapsed {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) { controlsCollapsed = false }
                     } label: {
-                        RabbitIcon(.settings, size: 18)
+                        RabbitIcon(.settings, size: isLandscape ? 16 : 18)
                             .foregroundStyle(.white)
-                            .frame(width: 40, height: 40)
+                            .frame(width: barHeight, height: barHeight)
                             .background(RCColor.hudBg, in: Circle())
                     }
                     .accessibilityLabel("展开会话控制栏")
@@ -126,34 +133,34 @@ struct SessionView: View {
                     HStack(spacing: 0) {
                         Button {
                             if session.isConnected { confirmExit = true } else { dismiss() }
-                        } label: { RabbitIcon(.close, size: 17).frame(width: 40, height: 40) }
+                        } label: { RabbitIcon(.close, size: isLandscape ? 15 : 17).frame(width: barHeight, height: barHeight) }
                         .accessibilityLabel("退出远程协助").accessibilityIdentifier("session.exit")
-                        Divider().frame(height: 16).overlay(.white.opacity(0.25))
+                        Divider().frame(height: 14).overlay(.white.opacity(0.25))
                         Button { session.releasePressedInput(); showControlHub = true } label: {
-                            HStack(spacing: 5) {
-                                RabbitIcon(.settings, size: 16)
+                            HStack(spacing: 4) {
+                                RabbitIcon(.settings, size: isLandscape ? 14 : 16)
                                 Text(watchMode ? "观看" : "控制")
                             }
-                            .padding(.horizontal, 10).frame(minHeight: 40)
+                            .padding(.horizontal, isLandscape ? 8 : 10).frame(minHeight: barHeight)
                         }.accessibilityIdentifier("session.controlCenter")
-                        Divider().frame(height: 16).overlay(.white.opacity(0.25))
+                        Divider().frame(height: 14).overlay(.white.opacity(0.25))
                         Button {
                             withAnimation(.easeInOut(duration: 0.18)) { controlsCollapsed = true }
                         } label: {
-                            RabbitIcon(.chevronUp, size: 14).frame(width: 34, height: 40)
+                            RabbitIcon(.chevronUp, size: 13).frame(width: isLandscape ? 28 : 34, height: barHeight)
                         }
                         .accessibilityLabel("收起会话控制栏")
                         .accessibilityIdentifier("session.collapseControls")
                     }
-                    .font(.subheadline.bold()).foregroundStyle(.white).background(RCColor.hudBg, in: Capsule())
+                    .font(isLandscape ? .caption.bold() : .subheadline.bold()).foregroundStyle(.white).background(RCColor.hudBg, in: Capsule())
                     if PrefsStore.shared.showHUD && session.isConnected {
                         SessionHUD(startedAt: startedAt, hud: session.hud).allowsHitTesting(false)
                     }
                 }
             }
             .opacity(inputPrefs.hudAlpha)
-            .safeAreaPadding(.top, 8)
-            .safeAreaPadding(.horizontal, 12)
+            .safeAreaPadding(.top, isLandscape ? 6 : 8)
+            .safeAreaPadding(.horizontal, isLandscape ? 14 : 12)
         }
         .statusBarHidden().persistentSystemOverlays(.hidden)
         .overlay {

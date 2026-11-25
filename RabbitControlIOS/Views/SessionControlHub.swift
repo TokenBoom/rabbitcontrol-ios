@@ -6,7 +6,6 @@ struct SessionControlHub: View {
     var watchOnly: Bool
     @Binding var showMouseTools: Bool
     var initialTool: DeviceDetailView.QuickTool? = nil
-    @State private var directTool: DeviceDetailView.QuickTool?
     var onExit: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var prefs = PrefsStore.shared
@@ -41,11 +40,7 @@ struct SessionControlHub: View {
                         Toggle(isOn: $input.naturalScroll) { Label("自然滚动方向", rabbitIcon: .arrowDown) }
                         Toggle(isOn: $showMouseTools) { Label("在桌面上显示鼠标工具", rabbitIcon: .mouse) }
                         NavigationLink { RemoteKeyboard(session: session).modifier(ConnectedTool(session: session)) } label: { Label("远程键盘", rabbitIcon: .keyboard) }
-                        NavigationLink { FileTransferView(device: device).modifier(ConnectedTool(session: session)) } label: { Label("文件传输", rabbitIcon: .fileTransfer) }
-                        .accessibilityIdentifier("hub.files")
-                        NavigationLink { TerminalView().modifier(ConnectedTool(session: session)) } label: { Label("终端", rabbitIcon: .terminal) }
-                        NavigationLink { PortMappingView(device: device).modifier(ConnectedTool(session: session)) } label: { Label("端口映射", rabbitIcon: .portMap) }
-                    } header: { Text("工具") } footer: {
+                    } header: { Text("操控") } footer: {
                         Text(canControl ? "轻点左键，长按或双指轻点右键，双指滚动，捏合缩放；触控板模式下轻点后再次触按拖动。" : "连接成功后可使用工具。")
                     }.disabled(!canControl)
                 }
@@ -114,20 +109,6 @@ struct SessionControlHub: View {
                     if !watchOnly {
                         Button(role: .destructive) { confirmLock = true } label: { Label("锁定远端屏幕", rabbitIcon: .security) }.disabled(!canControl)
                     }
-                }
-            }
-            .navigationDestination(item: $directTool) { tool in
-                Group {
-                    switch tool {
-                    case .files: FileTransferView(device: device).modifier(ConnectedTool(session: session))
-                    case .terminal: TerminalView().modifier(ConnectedTool(session: session))
-                    case .hub: EmptyView()
-                    }
-                }
-            }
-            .onAppear {
-                if directTool == nil, let initialTool, initialTool != .hub, session.isConnected {
-                    directTool = initialTool
                 }
             }
             .navigationTitle(watchOnly ? "观看设置" : "会话控制").navigationBarTitleDisplayMode(.inline)
@@ -204,7 +185,7 @@ struct SessionControlHub: View {
     }
 }
 
-private struct ConnectedTool: ViewModifier {
+struct ConnectedTool: ViewModifier {
     var session: SessionService
     func body(content: Content) -> some View {
         if session.isConnected && !session.peerWatchOnly { content }
