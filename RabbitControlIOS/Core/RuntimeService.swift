@@ -44,6 +44,11 @@ final class RuntimeService {
     /// 登录后调用:绑定设备 + 签发证书 + 拉起信令。
     /// 与 AuthService 平行的 runtime 内登录(信令/免密票据体系依赖 runtime 自己的会话)。
     func login(email: String, password: String) {
+        // 登录必然刚走过当前 serverTarget 的 TLS/CA 链,以最晚配置重建 runtime,
+        // 避免 App 启动时 caCertPem/useHTTPS 尚未就绪导致的信令 TLS 静默失败。
+        let target = AuthService.shared.serverTarget
+        initialized = false
+        boot(serverHost: target.host, useHTTPS: target.useHTTPS)
         guard initialized else { return }
         guard let payload = Self.jsonString(["email": email, "password": password]) else { return }
         if let resp = Self.callSyncJSON(payload, rc_runtime_login), resp["error"] == nil {
