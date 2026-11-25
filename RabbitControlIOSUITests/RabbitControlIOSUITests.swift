@@ -18,7 +18,7 @@ final class RabbitControlIOSUITests: XCTestCase {
     @MainActor func testAssistIsStandaloneAndReturnsToOrigin() {
         let app = launch()
         capture("devices-home", app: app)
-        app.buttons["devices.assist"].tap()
+        app.buttons["tab.远程协助"].tap()
         let connect = app.buttons["assist.connect"]
         XCTAssertTrue(connect.waitForExistence(timeout: 5))
         XCTAssertFalse(connect.isEnabled)
@@ -27,20 +27,18 @@ final class RabbitControlIOSUITests: XCTestCase {
         target.tap(); target.typeText("123")
         app.buttons["清除连接目标"].tap()
         XCTAssertEqual(target.value as? String, "设备 ID 或 IP:端口")
-        XCTAssertFalse(app.buttons["tab.我的设备"].exists)
+        // 协助页是底部 Tab,底栏在协助页可见、进会话后隐藏
+        XCTAssertTrue(app.buttons["tab.我的设备"].exists)
         let field = app.textFields["assist.partnerID"]
         field.tap(); field.typeText("127.0.0.1:9901\n")
         let exit = app.buttons["session.exit"]
         XCTAssertTrue(exit.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["tab.我的"].exists)
-        XCTAssertFalse(app.buttons["assist.close"].isHittable)
         app.buttons["session.controlCenter"].tap()
         app.buttons["完成"].tap()
         exit.tap()
         XCTAssertTrue(connect.waitForExistence(timeout: 5))
         XCTAssertEqual(field.value as? String, "127.0.0.1:9901")
-        app.buttons["assist.close"].tap()
-        XCTAssertTrue(app.buttons["devices.assist"].waitForExistence(timeout: 5))
     }
 
     @MainActor func testAccountDeviceSearchAndOfflineState() {
@@ -76,7 +74,6 @@ final class RabbitControlIOSUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["login.submit"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["tab.我的"].exists)
-        XCTAssertFalse(app.buttons["devices.assist"].exists)
         capture("login-page", app: app)
         app.buttons["服务器设置"].tap()
         let host = app.textFields["服务器主机名或 IP"]

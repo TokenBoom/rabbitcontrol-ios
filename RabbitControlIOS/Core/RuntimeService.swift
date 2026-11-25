@@ -95,10 +95,7 @@ final class RuntimeService {
         var dict: [String: Any] = [
             "target_id": targetID,
             "watch_only": watchOnly,
-            // 求分辨率超出被控端能力时 host 会静默不出流(v0.1.13 实测),1280x720 是安全下限;
-            // 实际流分辨率由被控端按自身屏幕协商返回。
-            "width": 1280,
-            "height": 720,
+            // 不硬编码低分辨率，交由被控端按自身当前屏幕协商
             "fps": prefs.effectiveFps,
             "bitrate_bps": prefs.effectiveBitrateBps,
         ]

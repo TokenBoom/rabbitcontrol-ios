@@ -37,15 +37,19 @@ struct RemoteVideoView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
+            .overlay(alignment: .trailing) {
                 if !watchOnly && showMouseTools {
-                    HStack {
-                        Button { session.sendWheel(delta: 3) } label: { RabbitIcon(.arrowUp, size: 18).frame(minWidth: 32, minHeight: 32) }
+                    VStack(spacing: 8) {
+                        Button { session.sendWheel(delta: 3) } label: { RabbitIcon(.arrowUp, size: 18).frame(width: 36, height: 36) }
                             .accessibilityLabel("向上滚动")
-                        Button { session.sendWheel(delta: -3) } label: { RabbitIcon(.arrowDown, size: 18).frame(minWidth: 32, minHeight: 32) }
+                        Divider().frame(width: 20).overlay(.white.opacity(0.25))
+                        Button { session.sendWheel(delta: -3) } label: { RabbitIcon(.arrowDown, size: 18).frame(width: 36, height: 36) }
                             .accessibilityLabel("向下滚动")
-                    }.buttonStyle(.bordered).padding(8)
-                    .foregroundStyle(.white).background(RCColor.hudBg, in: Capsule()).padding(.bottom, 32)
+                    }
+                    .padding(6)
+                    .foregroundStyle(.white)
+                    .background(RCColor.hudBg, in: Capsule())
+                    .safeAreaPadding(.trailing, 10)
                 }
             }
             .onDisappear {

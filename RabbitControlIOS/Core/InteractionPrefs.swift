@@ -40,7 +40,29 @@ enum PortraitLayout: String, CaseIterable {
     }
 }
 
-/// 会话交互偏好:触控模式、指针灵敏度、滚动方向与布局,UserDefaults 持久化。
+enum AppThemeMode: String, CaseIterable {
+    case system
+    case light
+    case dark
+
+    var label: String {
+        switch self {
+        case .system: return "跟随系统"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+/// 会话交互偏好:触控模式、指针灵敏度、滚动方向、外观与布局,UserDefaults 持久化。
 @Observable final class InteractionPrefs {
     static let shared = InteractionPrefs()
 
@@ -74,6 +96,15 @@ enum PortraitLayout: String, CaseIterable {
     var controlsLeading: Bool {
         didSet { defaults.set(controlsLeading, forKey: "rc.controlsLeading") }
     }
+    var themeMode: AppThemeMode {
+        didSet { defaults.set(themeMode.rawValue, forKey: "rc.themeMode") }
+    }
+    var audioEnabledDefault: Bool {
+        didSet { defaults.set(audioEnabledDefault, forKey: "rc.audioEnabledDefault") }
+    }
+    var clipboardEnabledDefault: Bool {
+        didSet { defaults.set(clipboardEnabledDefault, forKey: "rc.clipboardEnabledDefault") }
+    }
 
     private let defaults = UserDefaults.standard
 
@@ -82,12 +113,15 @@ enum PortraitLayout: String, CaseIterable {
         touchMode = TouchInputMode(rawValue: d.string(forKey: "rc.touchMode") ?? "") ?? .directTouch
         pointerSensitivity = d.object(forKey: "rc.pointerSensitivity") == nil ? 1.15 : d.double(forKey: "rc.pointerSensitivity")
         naturalScroll = d.object(forKey: "rc.naturalScroll") == nil ? true : d.bool(forKey: "rc.naturalScroll")
-        directTouchOffset = d.object(forKey: "rc.directTouchOffset") == nil ? true : d.bool(forKey: "rc.directTouchOffset")
+        directTouchOffset = d.object(forKey: "rc.directTouchOffset") == nil ? false : d.bool(forKey: "rc.directTouchOffset")
         orientation = SessionOrientation(rawValue: d.string(forKey: "rc.orientation") ?? "") ?? .auto
         portraitLayout = PortraitLayout(rawValue: d.string(forKey: "rc.portraitLayout") ?? "") ?? .auto
         keyboardBarVisible = d.object(forKey: "rc.keyboardBarVisible") == nil ? false : d.bool(forKey: "rc.keyboardBarVisible")
         hasSeenGestureGuide = d.bool(forKey: "rc.hasSeenGestureGuide")
         hudAlpha = d.object(forKey: "rc.hudAlpha") == nil ? 1.0 : d.double(forKey: "rc.hudAlpha")
         controlsLeading = d.bool(forKey: "rc.controlsLeading")
+        themeMode = AppThemeMode(rawValue: d.string(forKey: "rc.themeMode") ?? "") ?? .system
+        audioEnabledDefault = d.object(forKey: "rc.audioEnabledDefault") == nil ? true : d.bool(forKey: "rc.audioEnabledDefault")
+        clipboardEnabledDefault = d.bool(forKey: "rc.clipboardEnabledDefault")
     }
 }

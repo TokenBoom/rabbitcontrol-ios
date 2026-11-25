@@ -15,12 +15,17 @@ import RabbitControlCore
     @ObservationIgnored
     var pan = CGPoint.zero
 
+    /// 等比完整适配(aspect-contain)后的视频矩形,缩放以它为基准放大。
+    /// 竖屏看横屏桌面时自然等价于宽度充满;横屏或竖长视频不会裁切桌面边缘,
+    /// 保证画面上每个可见点的输入映射与显示一一对应。
     func videoRect(in size: CGSize) -> CGRect {
-        guard videoSize.width > 0, videoSize.height > 0 else {
+        guard videoSize.width > 0, videoSize.height > 0, size.width > 0, size.height > 0 else {
             return CGRect(origin: .zero, size: size)
         }
-        let width = size.width * scale
-        let height = width * videoSize.height / videoSize.width
+        let ratio = videoSize.width / videoSize.height
+        let baseWidth = min(size.width, size.height * ratio)
+        let width = baseWidth * scale
+        let height = width / ratio
         func origin(_ extent: CGFloat, _ viewport: CGFloat, _ offset: CGFloat) -> CGFloat {
             let center = (viewport - extent) / 2
             return center >= 0 ? center : center + min(-center, max(center, offset))

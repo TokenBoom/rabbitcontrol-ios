@@ -5,7 +5,6 @@ import SwiftUI
 /// 数据源为**登录账号的设备**;局域网发现不作为独立设备来源,
 /// 仅在发现的节点与本账号设备匹配(device_id)时,标记 LAN 直连可用。
 struct DeviceListView: View {
-    var openAssist: () -> Void
     @State private var onlineExpanded = true
     @State private var offlineExpanded = true
 
@@ -38,20 +37,6 @@ struct DeviceListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                Button(action: openAssist) {
-                    HStack(spacing: 12) {
-                        RabbitIcon(.remoteAssist, size: 27)
-                            .frame(width: 44, height: 44).foregroundStyle(.tint)
-                            .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading) {
-                            Text("远程协助").font(.headline)
-                            Text("使用设备 ID 或直连地址连接").font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        RabbitIcon(.chevronRight, size: 16)
-                    }.padding().background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
-                }.buttonStyle(.plain).accessibilityIdentifier("devices.assist")
-
                 if let error = auth.devicesError {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("未能刷新设备", rabbitIcon: .warning).font(.headline)

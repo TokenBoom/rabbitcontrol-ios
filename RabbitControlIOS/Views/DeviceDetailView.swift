@@ -10,6 +10,21 @@ struct DeviceDetailView: View {
     private var account: AccountDevice? { AuthService.shared.devices.first { $0.deviceID == device.id } }
     private var online: Bool { account?.online ?? false }
     private var canConnect: Bool { account.map { $0.online && !$0.disabled && $0.allowRemoteAssist } ?? false }
+    /// 本机(iOS 注册进账号的 controller 设备):只显示信息,不提供控制入口。
+    private var isSelfDevice: Bool {
+        guard let account else { return false }
+        if account.os == "ios" { return true }
+        if let own = RuntimeService.shared.deviceID {
+            return account.deviceID.replacingOccurrences(of: " ", with: "") == own.replacingOccurrences(of: " ", with: "")
+        }
+        return false
+    }
+    /// 快捷入口要直达的工具;nil 表示只进会话。
+    enum QuickTool: Int, Identifiable {
+        var id: Int { rawValue }
+        case files = 1, terminal = 2, hub = 3
+    }
+    @State private var quickTool: QuickTool?
     @State private var showRename = false
     @State private var showRemoveConfirm = false
     @State private var renameText = ""
@@ -27,6 +42,41 @@ struct DeviceDetailView: View {
         }
     }
 
+
+    /// 快捷入口按钮(图标在上文字在下)。
+    private func quickAction(_ title: String, icon: RabbitIcon.Name, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                RabbitIcon(icon, size: 22)
+                Text(title).font(.caption)
+            }
+            .foregroundStyle(RCColor.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+    }
+
+    /// 本机信息卡:只展示设备信息,没有任何控制入口。
+    private var selfInfoCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("本机设备", rabbitIcon: .phone)
+                .font(.headline)
+            LabeledContent("设备 ID", value: device.displayID)
+            if let account {
+                LabeledContent("主机名", value: account.hostname.isEmpty ? "—" : account.hostname)
+                LabeledContent("系统", value: account.os.isEmpty ? "—" : account.os)
+            }
+            Text("这是当前 iPhone 注册到账号的设备。iOS 仅作为控制端,不能被远程控制。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+    }
+
     private var connectionHint: String {
         guard let account else { return "设备已不在当前账号中，请返回设备列表。" }
         if account.disabled { return "设备已被停用，暂时无法连接。" }
@@ -38,21 +88,49 @@ struct DeviceDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // 预览卡
-                DevicePreview(device: device, showsCaption: online)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16.0 / 10.0, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay {
-                        if !online {
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(.black.opacity(0.45))
-                            Text("设备离线")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.white)
+                if isSelfDevice {
+                    selfInfoCard
+                } else {
+                // 预览卡:点击进入桌面
+                Button { if canConnect { sessionMode = .control } } label: {
+                    DevicePreview(device: device, showsCaption: online)
+                        .frame(maxWidth: .infinity)
+                        .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                        .overlay {
+                            if online {
+                                HStack(spacing: 4) {
+                                    Text("进入桌面").font(.headline)
+                                    RabbitIcon(.chevronRight, size: 16)
+                                }.foregroundStyle(.white).shadow(radius: 4)
+                            } else {
+                                Text("设备离线")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.white)
+                            }
                         }
-                    }
-                    .padding(.horizontal, 16)
+                        .background(.black.opacity(online ? 0 : 0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canConnect)
+                .accessibilityIdentifier("detail.enterDesktop")
+                .padding(.horizontal, 16)
+
+                // 快捷入口行
+                HStack(spacing: 0) {
+                    quickAction("文件传输", icon: .fileTransfer, id: "detail.files") { quickTool = .files; sessionMode = .control }
+                    Divider().frame(height: 34)
+                    quickAction("观看模式", icon: .watchScreen, id: "detail.watchMode") { sessionMode = .watch }
+                    Divider().frame(height: 34)
+                    quickAction("终端", icon: .terminal, id: "detail.terminal") { quickTool = .terminal; sessionMode = .control }
+                    Divider().frame(height: 34)
+                    quickAction("更多", icon: .ellipsis, id: "detail.more") { quickTool = .hub; sessionMode = .control }
+                }
+                .padding(.vertical, 8)
+                .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+                .opacity(canConnect ? 1 : 0.45)
+                .disabled(!canConnect)
 
                 // 状态行
                 HStack(spacing: 8) {
@@ -79,51 +157,11 @@ struct DeviceDetailView: View {
                 }
                 .padding(.horizontal, 20)
 
-                // 主操作
-                VStack(spacing: 12) {
-                    Button {
-                        sessionMode = .control
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text("进入桌面")
-                                .font(.headline)
-                            RabbitIcon(.arrowRight, size: 16)
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
-                        .background(
-                            canConnect ? RCColor.accent : RCColor.stroke,
-                            in: RoundedRectangle(cornerRadius: 10)
-                        )
-                    }
-                    .disabled(!canConnect)
-                    .accessibilityIdentifier("detail.enterDesktop")
-
-                    Button {
-                        sessionMode = .watch
-                    } label: {
-                        HStack(spacing: 6) {
-                            RabbitIcon(.watchScreen, size: 20)
-                            Text("查看设备屏幕（只读）")
-                        }
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(canConnect ? RCColor.textPrimary : RCColor.textDisabled)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
-                        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 10))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 10)
-                                .strokeBorder(RCColor.stroke, lineWidth: 1)
-                        }
-                    }
-                    .disabled(!canConnect)
-                    .accessibilityIdentifier("detail.watchMode")
+                if !isSelfDevice {
+                    Text(connectionHint)
+                        .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
-
-                Text(connectionHint)
-                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
+                }
 
             }
             .padding(.top, 8)
@@ -183,8 +221,8 @@ struct DeviceDetailView: View {
             Button("好") { actionError = nil }
         } message: { Text(actionError ?? "") }
         .accessibilityHidden(sessionMode != nil)
-        .fullScreenCover(item: $sessionMode, onDismiss: SessionService.shared.close) { mode in
-            SessionView(device: device, mode: mode)
+        .fullScreenCover(item: $sessionMode, onDismiss: { quickTool = nil; SessionService.shared.close() }) { mode in
+            SessionView(device: device, mode: mode, initialTool: mode == .control ? quickTool : nil)
         }
     }
 }

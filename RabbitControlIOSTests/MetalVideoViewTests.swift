@@ -37,19 +37,23 @@ struct MetalVideoViewTests {
     }
 
     @MainActor
-    @Test("横屏 1x 仍铺满宽度，上下可平移到桌面边缘，复位回到居中")
+    @Test("横屏 1x 等比完整显示不裁切，放大后可平移，复位回到居中")
     func landscapeFitsWidthAndPans() {
         let zoom = ZoomPanState()
         zoom.videoSize = CGSize(width: 1280, height: 720)
         let size = CGSize(width: 800, height: 400)
-        let centered = CGRect(x: 0, y: -25, width: 800, height: 450)
+        // 16:9 视频放进 2:1 视口:按高度适配,左右留边居中,不裁切画面
+        let centered = CGRect(x: 400.0 - 400.0 * 16.0 / 9.0 / 2.0, y: 0, width: 400.0 * 16.0 / 9.0, height: 400)
         #expect(zoom.videoRect(in: size) == centered)
+        // 1x 已完整显示,平移不生效(无越界可移)
         zoom.pan = CGPoint(x: 100, y: -200)
-        #expect(zoom.videoRect(in: size) == CGRect(x: 0, y: -50, width: 800, height: 450))
-        zoom.pan.y = 200
-        #expect(zoom.videoRect(in: size).minY == 0)
+        #expect(zoom.videoRect(in: size) == centered)
+        // 放大后可平移,且边缘 clamp 不露出视频外区域
         zoom.scale = 2
-        #expect(zoom.videoRect(in: size).width == 1600)
+        #expect(zoom.videoRect(in: size).width == centered.width * 2)
+        zoom.pan = CGPoint(x: 10000, y: 10000)
+        let rect = zoom.videoRect(in: size)
+        #expect(rect.maxX >= size.width && rect.maxY >= size.height)
         zoom.reset()
         #expect(zoom.videoRect(in: size) == centered)
     }

@@ -184,7 +184,14 @@ final class SessionService {
             state = .connecting(phase: data?["phase"] as? String ?? "")
         case "negotiated":
             peerWatchOnly = peerWatchOnly || data?["watch_only"] as? Bool == true
+            if !InteractionPrefs.shared.audioEnabledDefault && !audioMuted {
+                audioMuted = true
+                sendCommand(["type": "set_audio_muted", "muted": true])
+            }
             setPlaybackActive(!audioMuted)
+            if InteractionPrefs.shared.clipboardEnabledDefault && !peerWatchOnly && !clipboardEnabled {
+                setClipboardEnabled(true)
+            }
             mutuallyAuthenticated = data?["mtls_active"] as? Bool
             state = .negotiated(
                 width: data?["width"] as? Int ?? 0,
@@ -317,10 +324,22 @@ final class SessionService {
     }
 
     func setStream(width: Int = 0, height: Int = 0, fps: Int = 0) {
-        guard isConnected, !peerWatchOnly, let display,
-              (width == 0 && height == 0 || display.presets.contains { $0.width == width && $0.height == height }),
-              (0...max(0, display.maxFps)).contains(fps) else { return }
-        sendCommand(["type": "set_stream_params", "width": width, "height": height, "fps": fps])
+        guard isConnected, !peerWatchOnly, let display else { return }
+        let targetW = width > 0 ? width : display.width
+        let targetH = height > 0 ? height : display.height
+        let targetFps = fps > 0 ? fps : display.fps
+        let resValid = (width == 0 && height == 0)
+            || (width == display.width && height == display.height)
+            || display.presets.contains { $0.width == width && $0.height == height }
+        guard resValid, (0...max(0, display.maxFps)).contains(fps) else { return }
+        sendCommand(["type": "set_stream_params", "width": targetW, "height": targetH, "fps": targetFps])
+        // 乐观更新本地选中状态，并保持音频通道处于激活/非静音态
+        self.display = DisplayConfig(width: targetW, height: targetH, fps: targetFps,
+                                     maxFps: display.maxFps, presets: display.presets)
+        if !audioMuted {
+            setPlaybackActive(true)
+            sendCommand(["type": "set_audio_muted", "muted": false])
+        }
     }
 
     private func clearClipboard() {

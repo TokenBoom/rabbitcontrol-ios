@@ -5,6 +5,10 @@ struct SessionView: View {
     var mode: DeviceDetailView.SessionMode
     var directAddr: String?
     var connectionPassword = ""
+    /// 从设备详情快捷入口进入时,连上后直接打开的工具。
+    var initialTool: DeviceDetailView.QuickTool? = nil
+    @State private var pendingTool: DeviceDetailView.QuickTool?
+    @State private var hubTool: DeviceDetailView.QuickTool?
 
     @Environment(\.dismiss) private var dismiss
     @State private var startedAt = Date.now
@@ -20,6 +24,8 @@ struct SessionView: View {
     @State private var zoomPan = ZoomPanState()
     @State private var inputPrefs = InteractionPrefs.shared
     @State private var showGuide = false
+    @State private var openedTool = false
+    @State private var controlsCollapsed = false
     @Environment(\.verticalSizeClass) private var verticalClass
     private var watchMode: Bool { mode == .watch || session.peerWatchOnly }
     /// 竖屏且(选了分屏或智能模式下处于触控板模式)时启用上下分屏。
@@ -50,14 +56,20 @@ struct SessionView: View {
                             RCColor.hudBg
                             TouchInputView(session: session, zoomPan: zoomPan, watchOnly: watchMode, trackpadOnly: true)
                             VStack {
-                                Spacer()
-                                HStack {
+                                HStack(spacing: 4) {
                                     RabbitIcon(.mouse, size: 13)
                                     Text("触控板 · 单指移动 轻点左键 双指右键/滚动")
-                                }.font(.caption2).foregroundStyle(.white.opacity(0.4)).padding(.bottom, 6)
+                                }.font(.caption2).foregroundStyle(.white.opacity(0.45)).padding(.top, 8)
+                                Spacer()
                             }.allowsHitTesting(false)
-                        }.frame(height: 240)
-                    }.ignoresSafeArea()
+                        }.frame(height: 220)
+                        if !watchMode {
+                            SessionKeyboardBar(session: session, expanded: $keyboardBarExpanded)
+                                .padding(.vertical, 6)
+                                .background(RCColor.hudBg)
+                                .onChange(of: keyboardBarExpanded) { InteractionPrefs.shared.keyboardBarVisible = keyboardBarExpanded }
+                        }
+                    }.ignoresSafeArea(.container, edges: [.top, .horizontal])
                 } else {
                     RemoteVideoView(session: session, watchOnly: watchMode, showMouseTools: showMouseTools,
                                     zoomPan: zoomPan,
@@ -88,32 +100,57 @@ struct SessionView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if session.isConnected && !watchMode {
+            if session.isConnected && !watchMode && !splitLayout {
                 SessionKeyboardBar(session: session, expanded: $keyboardBarExpanded)
-                    .padding(.bottom, 6)
+                    .safeAreaPadding(.bottom, 6)
                     .onChange(of: keyboardBarExpanded) { InteractionPrefs.shared.keyboardBarVisible = keyboardBarExpanded }
             }
         }
         .overlay(alignment: inputPrefs.controlsLeading ? .topLeading : .topTrailing) {
             VStack(alignment: inputPrefs.controlsLeading ? .leading : .trailing, spacing: 8) {
-                HStack(spacing: 0) {
+                if controlsCollapsed {
                     Button {
-                        if session.isConnected { confirmExit = true } else { dismiss() }
-                    } label: { RabbitIcon(.close, size: 18).frame(width: 44, height: 44) }
-                    .accessibilityLabel("退出远程协助").accessibilityIdentifier("session.exit")
-                    Divider().frame(height: 18)
-                    Button { session.releasePressedInput(); showControlHub = true } label: {
-                        Label(watchMode ? "观看模式" : "会话控制", rabbitIcon: .settings)
-                            .padding(.horizontal, 12).frame(minHeight: 44)
-                    }.accessibilityIdentifier("session.controlCenter")
-                }
-                .font(.subheadline.bold()).foregroundStyle(.white).background(RCColor.hudBg, in: Capsule())
-                if PrefsStore.shared.showHUD && session.isConnected {
-                    SessionHUD(startedAt: startedAt, hud: session.hud).allowsHitTesting(false)
+                        withAnimation(.easeInOut(duration: 0.18)) { controlsCollapsed = false }
+                    } label: {
+                        RabbitIcon(.settings, size: 18)
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(RCColor.hudBg, in: Circle())
+                    }
+                    .accessibilityLabel("展开会话控制栏")
+                    .accessibilityIdentifier("session.expandControls")
+                } else {
+                    HStack(spacing: 0) {
+                        Button {
+                            if session.isConnected { confirmExit = true } else { dismiss() }
+                        } label: { RabbitIcon(.close, size: 17).frame(width: 40, height: 40) }
+                        .accessibilityLabel("退出远程协助").accessibilityIdentifier("session.exit")
+                        Divider().frame(height: 16).overlay(.white.opacity(0.25))
+                        Button { session.releasePressedInput(); showControlHub = true } label: {
+                            HStack(spacing: 5) {
+                                RabbitIcon(.settings, size: 16)
+                                Text(watchMode ? "观看" : "控制")
+                            }
+                            .padding(.horizontal, 10).frame(minHeight: 40)
+                        }.accessibilityIdentifier("session.controlCenter")
+                        Divider().frame(height: 16).overlay(.white.opacity(0.25))
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) { controlsCollapsed = true }
+                        } label: {
+                            RabbitIcon(.chevronUp, size: 14).frame(width: 34, height: 40)
+                        }
+                        .accessibilityLabel("收起会话控制栏")
+                        .accessibilityIdentifier("session.collapseControls")
+                    }
+                    .font(.subheadline.bold()).foregroundStyle(.white).background(RCColor.hudBg, in: Capsule())
+                    if PrefsStore.shared.showHUD && session.isConnected {
+                        SessionHUD(startedAt: startedAt, hud: session.hud).allowsHitTesting(false)
+                    }
                 }
             }
             .opacity(inputPrefs.hudAlpha)
-            .padding(.horizontal, 12)
+            .safeAreaPadding(.top, 8)
+            .safeAreaPadding(.horizontal, 12)
         }
         .statusBarHidden().persistentSystemOverlays(.hidden)
         .overlay {
@@ -130,6 +167,11 @@ struct SessionView: View {
         }
         .onDisappear { SessionOrientationLock.restore() }
         .onChange(of: session.isConnected) {
+            if session.isConnected, let tool = pendingTool ?? initialTool, openedTool == false {
+                openedTool = true
+                hubTool = tool == .hub ? nil : tool
+                showControlHub = true
+            }
             if session.isConnected {
                 TargetHistory.shared.recordConnect(directAddr ?? device.id.replacingOccurrences(of: " ", with: ""))
             }
@@ -145,7 +187,7 @@ struct SessionView: View {
             Button("取消", role: .cancel) {}
         }
         .sheet(isPresented: $showControlHub) {
-            SessionControlHub(session: session, device: device, watchOnly: watchMode, showMouseTools: $showMouseTools) { showControlHub = false; dismiss() }
+            SessionControlHub(session: session, device: device, watchOnly: watchMode, showMouseTools: $showMouseTools, initialTool: hubTool) { showControlHub = false; dismiss() }
                 .presentationDetents([.large]).presentationDragIndicator(.visible)
         }
     }

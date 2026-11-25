@@ -25,7 +25,15 @@ enum AssistTarget: Identifiable, Equatable {
     var address: String? { if case .direct(let addr) = self { addr } else { nil } }
 }
 
+/// 协助页会话是否正在全屏显示;RootView 据此隐藏悬浮底栏。
+@Observable
+final class AssistFlow {
+    static let shared = AssistFlow()
+    var sessionActive = false
+}
+
 struct AssistView: View {
+    var embeddedInTab = false
     @Environment(\.dismiss) private var dismiss
     @FocusState private var editing: Bool
     @State private var input = ""
@@ -135,15 +143,24 @@ struct AssistView: View {
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("远程协助")
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("关闭") { dismiss() }.accessibilityHidden(target != nil).accessibilityIdentifier("assist.close")
+            if !embeddedInTab {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }.accessibilityHidden(target != nil).accessibilityIdentifier("assist.close")
+                }
             }
         }
         .accessibilityHidden(target != nil)
-        .fullScreenCover(item: $target, onDismiss: { password = ""; SessionService.shared.close() }) { target in
+        .fullScreenCover(item: $target, onDismiss: {
+            AssistFlow.shared.sessionActive = false
+            password = ""
+            SessionService.shared.close()
+        }) { target in
             SessionView(device: Device(id: target.id, name: target.id, kind: .mac, online: true,
                                        isLocal: false, wallpaper: .coast), mode: mode, directAddr: target.address,
                         connectionPassword: password)
+        }
+        .onChange(of: target != nil) {
+            AssistFlow.shared.sessionActive = target != nil
         }
     }
 

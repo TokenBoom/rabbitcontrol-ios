@@ -5,6 +5,8 @@ struct SessionControlHub: View {
     var device: Device
     var watchOnly: Bool
     @Binding var showMouseTools: Bool
+    var initialTool: DeviceDetailView.QuickTool? = nil
+    @State private var directTool: DeviceDetailView.QuickTool?
     var onExit: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var prefs = PrefsStore.shared
@@ -42,6 +44,7 @@ struct SessionControlHub: View {
                         Toggle(isOn: $showMouseTools) { Label("在桌面上显示鼠标工具", rabbitIcon: .mouse) }
                         NavigationLink { RemoteKeyboard(session: session).modifier(ConnectedTool(session: session)) } label: { Label("远程键盘", rabbitIcon: .keyboard) }
                         NavigationLink { FileTransferView(device: device).modifier(ConnectedTool(session: session)) } label: { Label("文件传输", rabbitIcon: .fileTransfer) }
+                        .accessibilityIdentifier("hub.files")
                         NavigationLink { TerminalView().modifier(ConnectedTool(session: session)) } label: { Label("终端", rabbitIcon: .terminal) }
                         NavigationLink { PortMappingView(device: device).modifier(ConnectedTool(session: session)) } label: { Label("端口映射", rabbitIcon: .portMap) }
                     } header: { Text("工具") } footer: {
@@ -80,20 +83,8 @@ struct SessionControlHub: View {
                 }
                 if !watchOnly, let display = session.display {
                     Section("主显示器视频流") {
-                        Menu {
-                            ForEach(display.presets, id: \.self) { preset in
-                                Button(preset.label) { session.setStream(width: preset.width, height: preset.height) }
-                            }
-                        } label: {
-                            Label("分辨率：\(display.width) × \(display.height)", rabbitIcon: .display)
-                        }
-                        Menu {
-                            ForEach([15, 24, 30, 60, display.maxFps].filter { $0 > 0 && $0 <= display.maxFps }.reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }, id: \.self) { fps in
-                                Button("\(fps) fps") { session.setStream(fps: fps) }
-                            }
-                        } label: {
-                            Label("帧率：\(display.fps) fps", rabbitIcon: .display)
-                        }
+                        resolutionMenu(display: display)
+                        fpsMenu(display: display)
                     }.disabled(!canControl)
                 }
                 if !watchOnly {
@@ -127,6 +118,20 @@ struct SessionControlHub: View {
                     }
                 }
             }
+            .navigationDestination(item: $directTool) { tool in
+                Group {
+                    switch tool {
+                    case .files: FileTransferView(device: device).modifier(ConnectedTool(session: session))
+                    case .terminal: TerminalView().modifier(ConnectedTool(session: session))
+                    case .hub: EmptyView()
+                    }
+                }
+            }
+            .onAppear {
+                if directTool == nil, let initialTool, initialTool != .hub, session.isConnected {
+                    directTool = initialTool
+                }
+            }
             .navigationTitle(watchOnly ? "观看设置" : "会话控制").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -143,6 +148,62 @@ struct SessionControlHub: View {
             }
         }
     }
+    @ViewBuilder
+    private func resolutionMenu(display: SessionService.DisplayConfig) -> some View {
+        let presets: [SessionService.DisplayConfig.Preset] = {
+            if display.width > 0, display.height > 0,
+               !display.presets.contains(where: { $0.width == display.width && $0.height == display.height }) {
+                let current = SessionService.DisplayConfig.Preset(
+                    width: display.width, height: display.height,
+                    label: "\(display.width) × \(display.height)（当前）"
+                )
+                return [current] + display.presets
+            }
+            return display.presets
+        }()
+        Menu {
+            ForEach(presets, id: \.self) { preset in
+                Button {
+                    session.setStream(width: preset.width, height: preset.height)
+                } label: {
+                    if preset.width == display.width && preset.height == display.height {
+                        Label(preset.label, rabbitIcon: .checkmark)
+                    } else {
+                        Text(preset.label)
+                    }
+                }
+            }
+        } label: {
+            Label("分辨率：\(display.width) × \(display.height)", rabbitIcon: .display)
+        }
+    }
+
+    @ViewBuilder
+    private func fpsMenu(display: SessionService.DisplayConfig) -> some View {
+        Menu {
+            ForEach(Self.fpsOptions(display: display), id: \.self) { fps in
+                Button {
+                    session.setStream(fps: fps)
+                } label: {
+                    if fps == display.fps {
+                        Label("\(fps) fps", rabbitIcon: .checkmark)
+                    } else {
+                        Text("\(fps) fps")
+                    }
+                }
+            }
+        } label: {
+            Label("帧率：\(display.fps) fps", rabbitIcon: .display)
+        }
+    }
+
+    /// 帧率选项:30/60/90/120,封顶 120 与主机实际上限,始终包含当前值。
+    static func fpsOptions(display: SessionService.DisplayConfig) -> [Int] {
+        let cap = min(max(display.maxFps, display.fps), 120)
+        var list = [30, 60, 90, 120].filter { $0 <= cap }
+        if display.fps > 0, !list.contains(display.fps) { list.append(display.fps) }
+        return list.sorted()
+    }
 }
 
 private struct ConnectedTool: ViewModifier {
@@ -157,4 +218,6 @@ private struct ConnectedTool: ViewModifier {
             }
         }
     }
+
+
 }

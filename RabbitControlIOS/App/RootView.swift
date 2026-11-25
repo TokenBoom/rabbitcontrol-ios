@@ -1,18 +1,20 @@
 import SwiftUI
 
 struct RootView: View {
-    enum Tab { case devices, profile }
+    enum Tab { case devices, assist, profile }
+    @State private var assistFlow = AssistFlow.shared
+    @State private var inputPrefs = InteractionPrefs.shared
     @State private var selection: Tab = .devices
-    @State private var showAssist = false
     private var auth: AuthService { .shared }
 
     var body: some View {
         Group {
             if auth.isLoggedIn { home } else { LoginView() }
         }
+        .preferredColorScheme(inputPrefs.themeMode.colorScheme)
         .overlay { ToastOverlay(center: .shared).allowsHitTesting(false).animation(.easeInOut(duration: 0.2), value: ToastCenter.shared.message) }
         .onChange(of: auth.isLoggedIn) {
-            if !auth.isLoggedIn { showAssist = false; selection = .devices }
+            if !auth.isLoggedIn { selection = .devices }
         }
     }
 
@@ -22,15 +24,17 @@ struct RootView: View {
             VStack(spacing: 0) {
                 Group {
                     switch selection {
-                    case .devices: DeviceListView { showAssist = true }
+                    case .devices: DeviceListView()
+                    case .assist: AssistView(embeddedInTab: true)
                     case .profile: ProfileView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
-                if !showAssist {
+                if auth.isLoggedIn, !AssistFlow.shared.sessionActive {
                     HStack(spacing: 0) {
                         homeAction("我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
+                        homeAction("远程协助", icon: .remoteAssist, selected: selection == .assist) { selection = .assist }
                         homeAction("我的", icon: .person, selected: selection == .profile) { selection = .profile }
                     }
                     .padding(6)
@@ -41,8 +45,6 @@ struct RootView: View {
             }
             .background(RCColor.bgPage.ignoresSafeArea())
         }
-        .accessibilityHidden(showAssist)
-        .fullScreenCover(isPresented: $showAssist) { NavigationStack { AssistView() } }
     }
 
     private func homeAction(_ title: String, icon: RabbitIcon.Name, selected: Bool = false,

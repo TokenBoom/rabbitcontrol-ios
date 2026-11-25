@@ -20,52 +20,60 @@ struct SessionKeyboardBar: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 6) {
             if expanded {
                 VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        ForEach(mods, id: \.1) { mod in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(mods, id: \.1) { mod in
+                                Button {
+                                    if activeModifiers.contains(mod.1) { activeModifiers.remove(mod.1) }
+                                    else { activeModifiers.insert(mod.1) }
+                                } label: {
+                                    Text(mod.0).font(.headline).frame(width: 40, height: 34)
+                                        .background(activeModifiers.contains(mod.1) ? RCColor.accent : Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                                }.foregroundStyle(.white)
+                            }
+                            Divider().frame(height: 22).overlay(.white.opacity(0.3))
                             Button {
-                                if activeModifiers.contains(mod.1) { activeModifiers.remove(mod.1) }
-                                else { activeModifiers.insert(mod.1) }
+                                typing.toggle()
+                                textFocused = typing
                             } label: {
-                                Text(mod.0).font(.headline).frame(width: 40, height: 36)
-                                    .background(activeModifiers.contains(mod.1) ? RCColor.accent : Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                                HStack(spacing: 4) { RabbitIcon(.keyboard, size: 15); Text("打字") }
+                                    .font(.subheadline).frame(height: 34).padding(.horizontal, 10)
+                                    .background(typing ? RCColor.accent : Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
                             }.foregroundStyle(.white)
+                            .accessibilityIdentifier("sessionbar.typing")
                         }
-                        Divider().frame(height: 24).overlay(.white.opacity(0.3))
-                        Button {
-                            typing.toggle()
-                            textFocused = typing
-                        } label: {
-                            HStack(spacing: 4) { RabbitIcon(.keyboard, size: 16); Text("打字") }
-                                .font(.subheadline).frame(height: 36).padding(.horizontal, 10)
-                                .background(typing ? RCColor.accent : Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-                        }.foregroundStyle(.white)
-                        .accessibilityIdentifier("sessionbar.typing")
-                        Spacer()
+                        .padding(.horizontal, 10)
                     }
-                    HStack(spacing: 8) {
-                        ForEach(keys, id: \.1) { key in
-                            Button { tap(key.1) } label: {
-                                Text(key.0).font(.subheadline).frame(minWidth: 38, minHeight: 36)
-                                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-                            }.foregroundStyle(.white)
-                            .accessibilityLabel(key.0)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(keys, id: \.1) { key in
+                                Button { tap(key.1) } label: {
+                                    Text(key.0).font(.subheadline).frame(minWidth: 38, minHeight: 34)
+                                        .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                                }.foregroundStyle(.white)
+                                .accessibilityLabel(key.0)
+                            }
                         }
-                        Spacer()
+                        .padding(.horizontal, 10)
                     }
-                    HStack(spacing: 8) {
-                        ForEach(combos, id: \.0) { combo in
-                            Button { session.tapKey(combo.1, modifiers: combo.2) } label: {
-                                Text(combo.0).font(.subheadline.monospaced()).frame(minWidth: 46, minHeight: 36)
-                                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-                            }.foregroundStyle(.white)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(combos, id: \.0) { combo in
+                                Button { session.tapKey(combo.1, modifiers: combo.2) } label: {
+                                    Text(combo.0).font(.subheadline.monospaced()).frame(minWidth: 46, minHeight: 34)
+                                        .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                                }.foregroundStyle(.white)
+                            }
                         }
-                        Spacer()
+                        .padding(.horizontal, 10)
                     }
                 }
-                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+                .padding(.vertical, 10)
+                .background(RCColor.hudBg, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 10)
             }
             // 隐藏的文本捕捉框:软键盘逐字上屏
             TextField("", text: $typed)
@@ -94,7 +102,6 @@ struct SessionKeyboardBar: View {
             }
             .accessibilityLabel(expanded ? "收起键盘扩展条" : "展开键盘扩展条")
             .accessibilityIdentifier("sessionbar.toggle")
-            .padding(.bottom, 4)
         }
     }
 
