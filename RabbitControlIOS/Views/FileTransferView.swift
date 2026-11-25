@@ -9,6 +9,13 @@ struct FileTransferView: View {
     @State private var checkedLocal: Set<String> = []
     @State private var checkedRemote: Set<String> = []
     @State private var queue: [TransferItem] = MockTransfer.queue
+    @State private var tools = ToolService.shared
+    @State private var session = SessionService.shared
+    @State private var pathStack: [String] = []
+
+    private var useReal: Bool { session.sessionID != nil }
+    /// 当前远端路径(路径栈顶或根)。
+    private var remotePath: String { pathStack.last ?? "/" }
 
     enum Side: String, CaseIterable, Identifiable {
         case local = "本机"
@@ -27,8 +34,17 @@ struct FileTransferView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("文件传输")
-        .onAppear { AppChrome.shared.tabBarHidden = true }
-        .onDisappear { AppChrome.shared.tabBarHidden = false }
+        .onAppear {
+            AppChrome.shared.tabBarHidden = true
+            if useReal, let sid = session.sessionID {
+                tools.start(sessionID: sid)
+                tools.fileList(sessionID: sid, path: nil)
+            }
+        }
+        .onDisappear {
+            AppChrome.shared.tabBarHidden = false
+            if useReal { tools.stop() }
+        }
 
     }
 
@@ -50,17 +66,27 @@ struct FileTransferView: View {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(RCColor.accent)
-                Text(side == .local ? "/Users/yii/Downloads" : "/Users/yii/Documents/mycode/data")
+                Text(side == .local ? "App 文稿目录" : (useReal ? tools.currentPath : "/Users/yii/Documents/mycode/data"))
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(RCColor.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
                 HStack(spacing: 4) {
-                    toolbarIcon("chevron.left")
-                    toolbarIcon("arrow.up")
-                    toolbarIcon("arrow.clockwise")
-                    toolbarIcon("folder.badge.plus")
+                    if useReal, side == .remote, let sid = session.sessionID {
+                        toolbarAction("arrow.up") {
+                            if !pathStack.isEmpty { pathStack.removeLast() }
+                            tools.fileList(sessionID: sid, path: remotePath)
+                        }
+                        toolbarAction("arrow.clockwise") {
+                            tools.fileList(sessionID: sid, path: remotePath)
+                        }
+                    } else {
+                        toolbarIcon("chevron.left")
+                        toolbarIcon("arrow.up")
+                        toolbarIcon("arrow.clockwise")
+                        toolbarIcon("folder.badge.plus")
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -82,44 +108,108 @@ struct FileTransferView: View {
 
             RCColor.divider.frame(height: 1)
 
-            let files = side == .local ? MockTransfer.localFiles : MockTransfer.remoteFiles
-            let checked = side == .local ? checkedLocal : checkedRemote
-            ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
-                fileRow(file, checked: checked.contains(file.id), zebra: index % 2 == 1)
+            if useReal, side == .remote {
+                ForEach(Array(tools.fileEntries.enumerated()), id: \.element.id) { index, entry in
+                    realFileRow(entry, zebra: index % 2 == 1)
+                }
+                if tools.fileEntries.isEmpty {
+                    Text(tools.fileError ?? "空目录")
+                        .font(.system(size: 13))
+                        .foregroundStyle(RCColor.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                }
+            } else {
+                let files = side == .local ? MockTransfer.localFiles : MockTransfer.remoteFiles
+                let checked = side == .local ? checkedLocal : checkedRemote
+                ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
+                    fileRow(file, checked: checked.contains(file.id), zebra: index % 2 == 1)
+                }
             }
 
             RCColor.divider.frame(height: 1)
 
-            Button {
-                let selected = files.filter { checked.contains($0.id) }
-                for file in selected {
-                    queue.append(TransferItem(
-                        id: UUID().uuidString,
-                        name: file.name,
-                        status: .sent,
-                        size: file.size,
-                        from: side == .local ? "/Users/yii/Downloads" : "/Users/yii/Documents/mycode/data",
-                        to: side == .local ? "\\Users\\yii\\data" : "/Users/yii/Downloads"
-                    ))
+            if !(useReal && side == .remote) {
+                Button {
+                    let files = side == .local ? MockTransfer.localFiles : MockTransfer.remoteFiles
+                    let checked = side == .local ? checkedLocal : checkedRemote
+                    let selected = files.filter { checked.contains($0.id) }
+                    for file in selected {
+                        queue.append(TransferItem(
+                            id: UUID().uuidString,
+                            name: file.name,
+                            status: .sent,
+                            size: file.size,
+                            from: side == .local ? "/Users/yii/Downloads" : "/Users/yii/Documents/mycode/data",
+                            to: side == .local ? "\\Users\\yii\\data" : "/Users/yii/Downloads"
+                        ))
+                    }
+                    if side == .local { checkedLocal = [] } else { checkedRemote = [] }
+                    ToastCenter.shared.show("已加入传输队列")
+                } label: {
+                    let checked = side == .local ? checkedLocal : checkedRemote
+                    Text(side == .local ? "发送到远端 →" : "← 发送到本机")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .background(
+                            checked.isEmpty ? RCColor.stroke : RCColor.accent,
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
                 }
-                if side == .local { checkedLocal = [] } else { checkedRemote = [] }
-                ToastCenter.shared.show("已加入传输队列")
-            } label: {
-                Text(side == .local ? "发送到远端 →" : "← 发送到本机")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 40)
-                    .background(
-                        checked.isEmpty ? RCColor.stroke : RCColor.accent,
-                        in: RoundedRectangle(cornerRadius: 8)
-                    )
+                .disabled((side == .local ? checkedLocal : checkedRemote).isEmpty)
+                .padding(16)
+                .accessibilityIdentifier("transfer.send")
             }
-            .disabled(checked.isEmpty)
-            .padding(16)
-            .accessibilityIdentifier("transfer.send")
         }
         .background(.white, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func toolbarAction(_ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13))
+                .foregroundStyle(RCColor.textSecondary)
+                .frame(width: 28, height: 28)
+        }
+    }
+
+    /// 真实远端文件行:目录点击下钻,文件点击下载到 App 文稿目录。
+    private func realFileRow(_ entry: ToolService.RemoteFileEntry, zebra: Bool) -> some View {
+        Button {
+            guard let sid = session.sessionID else { return }
+            let base = remotePath == "/" ? "" : remotePath
+            let full = "\(base)/\(entry.name)"
+            if entry.isDir {
+                pathStack.append(full)
+                tools.fileList(sessionID: sid, path: full)
+            } else {
+                if tools.fileDownload(sessionID: sid, remotePath: full) != nil {
+                    ToastCenter.shared.show("已开始下载到本机文稿")
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: entry.isDir ? "folder.fill" : "doc")
+                    .font(.system(size: 14))
+                    .foregroundStyle(entry.isDir ? RCColor.accent : RCColor.textSecondary)
+                Text(entry.name)
+                    .font(.system(size: 14))
+                    .foregroundStyle(RCColor.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Text(entry.isDir ? "--" : ByteCountFormatter.string(fromByteCount: Int64(entry.size), countStyle: .file))
+                    .font(.system(size: 12))
+                    .foregroundStyle(RCColor.textSecondary)
+                    .frame(width: 70, alignment: .trailing)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .background(zebra ? Color(hex: 0xFAFAFA) : .white)
+        }
+        .buttonStyle(.plain)
     }
 
     private func toolbarIcon(_ systemImage: String) -> some View {

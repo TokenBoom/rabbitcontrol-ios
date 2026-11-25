@@ -104,3 +104,7 @@ char *rc_runtime_logout(void);
 char *rc_signal_start(const char *json);
 char *rc_signal_stop(void);
 char *rc_runtime_connect(const char *json);
+
+// ── 工具通道(文件/终端/端口映射)──
+char *rc_tools_call(uint64_t session_id, const char *json);
+char *rc_tools_poll(uint64_t session_id);

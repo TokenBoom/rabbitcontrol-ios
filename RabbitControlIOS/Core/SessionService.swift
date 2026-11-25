@@ -30,6 +30,8 @@ enum SessionState: Equatable {
 /// 远控会话服务:包装 core 会话 FFI,负责状态轮询与输入发送。
 @Observable
 final class SessionService {
+    static let shared = SessionService()
+
     private(set) var sessionID: UInt64?
     private(set) var state: SessionState = .idle
     private(set) var hud: [String: Any]?

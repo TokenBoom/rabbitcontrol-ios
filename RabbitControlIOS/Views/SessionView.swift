@@ -14,7 +14,7 @@ struct SessionView: View {
     @State private var quality = "超清 14M"
     @State private var frameRate = "144 帧"
     @State private var showSecurity = false
-    @State private var session = SessionService()
+    @State private var session = SessionService.shared
 
     private var watchMode: Bool { mode == .watch }
 

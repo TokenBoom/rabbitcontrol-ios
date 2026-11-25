@@ -1,37 +1,54 @@
 import SwiftUI
 
-/// 终端窗口(W3 移动端适配):深色静态壳,prompt + 闪烁光标 + 右上计时。
-/// 真实 PTY 属后续版本,本期为 mock。
+/// 真实终端:通过工具通道在远端开 PTY,输出滚动显示,底部输入行发送击键。
+/// 依赖活动会话(SessionService 已建连);无会话时降级提示。
 struct TerminalView: View {
     @State private var startedAt = Date.now
-    @State private var cursorVisible = true
+    @State private var input = ""
+    @State private var tools = ToolService.shared
+    @State private var session = SessionService.shared
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color(hex: 0x1E1E20).ignoresSafeArea()
 
-            // prompt 行:[host] [path] ~ >
-            HStack(spacing: 6) {
-                tag("[host]")
-                tag("[path]")
-                Text("~")
-                    .foregroundStyle(RCColor.accent)
-                Text(">")
-                    .foregroundStyle(RCColor.online)
-                Rectangle()
-                    .fill(RCColor.accent)
-                    .frame(width: 10, height: 18)
-                    .opacity(cursorVisible ? 1 : 0)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true)) {
-                            cursorVisible = false
-                        }
+            VStack(spacing: 0) {
+                // 输出区
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(tools.terminalOutput.isEmpty ? "连接中…" : tools.terminalOutput)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color(hex: 0xD4D4D4))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+                            .textSelection(.enabled)
+                            .id("output")
                     }
-                Spacer()
+                    .onChange(of: tools.terminalOutput) {
+                        withAnimation { proxy.scrollTo("output", anchor: .bottom) }
+                    }
+                }
+
+                // 输入行
+                HStack(spacing: 8) {
+                    Text(">")
+                        .foregroundStyle(RCColor.online)
+                    TextField("命令", text: $input)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onSubmit { sendInput() }
+                        .accessibilityIdentifier("terminal.input")
+                    Button("发送") { sendInput() }
+                        .font(.system(size: 13))
+                        .foregroundStyle(RCColor.accent)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color(hex: 0x2A2A2C))
             }
-            .font(.system(size: 13, design: .monospaced))
-            .padding(.horizontal, 16)
-            .padding(.top, 24)
 
             // 右上计时
             TimelineView(.periodic(from: startedAt, by: 1)) { context in
@@ -39,28 +56,40 @@ struct TerminalView: View {
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(Color(hex: 0x98989D))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .frame(maxWidth: .infinity, alignment: .topTrailing)
             .padding(.horizontal, 16)
-            .padding(.top, 24)
+            .padding(.top, 8)
         }
-        .navigationTitle("session1")
-        .onAppear { AppChrome.shared.tabBarHidden = true }
-        .onDisappear { AppChrome.shared.tabBarHidden = false }
-
+        .navigationTitle("终端")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .onAppear {
+            AppChrome.shared.tabBarHidden = true
+            guard let sid = session.sessionID else { return }
+            tools.start(sessionID: sid)
+            if tools.termID == nil {
+                tools.terminalOpen(sessionID: sid)
+            }
+        }
+        .onDisappear {
+            AppChrome.shared.tabBarHidden = false
+            if let sid = session.sessionID {
+                tools.terminalClose(sessionID: sid)
+            }
+            tools.stop()
+        }
+        .overlay {
+            if session.sessionID == nil {
+                ContentUnavailableView("需要活动会话", systemImage: "terminal",
+                                       description: Text("请先进入远程桌面建立连接"))
+            }
+        }
     }
 
-    private func tag(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(Color(hex: 0x98989D))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(Color(hex: 0x98989D), lineWidth: 1)
-            }
+    private func sendInput() {
+        guard !input.isEmpty, let sid = session.sessionID else { return }
+        tools.terminalInput(sessionID: sid, text: input + "\n")
+        input = ""
     }
 
     private func elapsed(at date: Date) -> String {

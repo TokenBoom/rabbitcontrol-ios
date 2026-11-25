@@ -5,8 +5,13 @@ import SwiftUI
 struct PortMappingView: View {
     var device: Device
 
-    @State private var mappings: [PortMapping] = MockMappings.items
+    @State private var mockMappings: [PortMapping] = MockMappings.items
     @State private var showAdd = false
+    @State private var tools = ToolService.shared
+    @State private var session = SessionService.shared
+
+    /// 有活动会话时用真实规则,否则保留 mock(供 UI 测试/预览)。
+    private var useReal: Bool { session.sessionID != nil }
 
     var body: some View {
         ScrollView {
@@ -49,9 +54,24 @@ struct PortMappingView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
 
-                    ForEach($mappings) { $mapping in
-                        RCColor.divider.frame(height: 1)
-                        mappingRow($mapping)
+                    if useReal {
+                        if tools.portmapRules.isEmpty {
+                            RCColor.divider.frame(height: 1)
+                            Text("暂无映射")
+                                .font(.system(size: 13))
+                                .foregroundStyle(RCColor.textSecondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 20)
+                        }
+                        ForEach(tools.portmapRules) { rule in
+                            RCColor.divider.frame(height: 1)
+                            realMappingRow(rule)
+                        }
+                    } else {
+                        ForEach($mockMappings) { $mapping in
+                            RCColor.divider.frame(height: 1)
+                            mappingRow($mapping)
+                        }
                     }
                 }
                 .background(.white, in: RoundedRectangle(cornerRadius: 12))
@@ -61,14 +81,59 @@ struct PortMappingView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("端口映射")
-        .onAppear { AppChrome.shared.tabBarHidden = true }
-        .onDisappear { AppChrome.shared.tabBarHidden = false }
+        .onAppear {
+            AppChrome.shared.tabBarHidden = true
+            if let sid = session.sessionID {
+                tools.start(sessionID: sid)
+                _ = tools // 事件驱动刷新列表
+            }
+        }
+        .onDisappear {
+            AppChrome.shared.tabBarHidden = false
+            tools.stop()
+        }
 
         .sheet(isPresented: $showAdd) {
             AddMappingSheet { mapping in
-                mappings.append(mapping)
+                if useReal, let sid = session.sessionID {
+                    tools.portmapAdd(
+                        sessionID: sid,
+                        name: mapping.name,
+                        localPort: UInt16(mapping.localPort) ?? 0,
+                        remoteHost: mapping.targetAddress,
+                        remotePort: UInt16(mapping.targetPort) ?? 0
+                    )
+                } else {
+                    mockMappings.append(mapping)
+                }
             }
         }
+    }
+
+    private func realMappingRow(_ rule: ToolService.PortmapRule) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(rule.name)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(rule.enabled ? RCColor.textPrimary : RCColor.textDisabled)
+                Text(":\(rule.localPort) → \(rule.targetAddr):\(rule.targetPort)")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(rule.enabled ? RCColor.textSecondary : RCColor.textDisabled)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { rule.enabled },
+                set: { on in
+                    if let sid = session.sessionID {
+                        tools.portmapToggle(sessionID: sid, ruleID: rule.id, enabled: on)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .tint(RCColor.accent)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private func mappingRow(_ mapping: Binding<PortMapping>) -> some View {
