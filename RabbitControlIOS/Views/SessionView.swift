@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SessionView: View {
     var device: Device
@@ -26,6 +27,8 @@ struct SessionView: View {
     @State private var showGuide = false
     @State private var openedTool = false
     @State private var controlsCollapsed = false
+    @State private var wasConnected = false
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalClass
     private var watchMode: Bool { mode == .watch || session.peerWatchOnly }
     /// 竖屏且(选了分屏或智能模式下处于触控板模式)时启用上下分屏。
@@ -162,18 +165,39 @@ struct SessionView: View {
             }
         }
         .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
             SessionOrientationLock.apply(inputPrefs.orientation)
             if !inputPrefs.hasSeenGestureGuide, !watchMode, !AuthService.uiTestingMock { showGuide = true }
         }
-        .onDisappear { SessionOrientationLock.restore() }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            SessionOrientationLock.restore()
+        }
         .onChange(of: session.isConnected) {
-            if session.isConnected, let tool = pendingTool ?? initialTool, openedTool == false {
-                openedTool = true
-                hubTool = tool == .hub ? nil : tool
-                showControlHub = true
-            }
             if session.isConnected {
+                wasConnected = true
+                if let tool = pendingTool ?? initialTool, openedTool == false {
+                    openedTool = true
+                    hubTool = tool == .hub ? nil : tool
+                    showControlHub = true
+                }
                 TargetHistory.shared.recordConnect(directAddr ?? device.id.replacingOccurrences(of: " ", with: ""))
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                UIApplication.shared.isIdleTimerDisabled = true
+                SessionOrientationLock.apply(inputPrefs.orientation)
+                if session.isConnected {
+                    session.requestIDR()
+                    session.resumeAudioIfNeeded()
+                } else if wasConnected, failure != nil, !AuthService.uiTestingMock {
+                    wasConnected = false
+                    attempt += 1
+                }
+            } else {
+                session.releasePressedInput()
+                UIApplication.shared.isIdleTimerDisabled = false
             }
         }
         .onChange(of: inputPrefs.orientation) { SessionOrientationLock.apply(inputPrefs.orientation) }

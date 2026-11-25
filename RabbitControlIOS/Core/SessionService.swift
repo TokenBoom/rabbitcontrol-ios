@@ -307,6 +307,13 @@ final class SessionService {
         sendCommand(["type": "set_audio_muted", "muted": muted])
     }
 
+    /// App 切回前台时重新激活音频会话(防止后台被系统打断后无声)。
+    func resumeAudioIfNeeded() {
+        guard isConnected, !audioMuted else { return }
+        playbackActive = false
+        setPlaybackActive(true)
+    }
+
     private func setPlaybackActive(_ active: Bool) {
         guard playbackActive != active else { return }
         let audio = AVAudioSession.sharedInstance()
