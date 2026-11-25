@@ -46,6 +46,8 @@ struct RabbitIcon: View {
         case speaker = "icon-speaker"
         case display = "icon-display"
         case folderAdd = "icon-folder-add"
+        case star = "icon-star"
+        case starFilled = "icon-star-filled"
     }
 
     let name: Name

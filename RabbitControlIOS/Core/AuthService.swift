@@ -48,12 +48,53 @@ final class AuthService {
         }
     }
 
+    struct SavedServer: Codable, Hashable, Identifiable {
+        var target: ServerTarget
+        var email: String?
+        var id: String { "\(target.host):\(target.effectiveAPIPort):\(target.useHTTPS)" }
+    }
+
     /// 当前服务器配置;持久化于 UserDefaults,默认本机调试实例。
     var serverTarget: ServerTarget {
         didSet {
             if let data = try? JSONEncoder().encode(serverTarget) {
                 UserDefaults.standard.set(data, forKey: "auth.serverTarget")
             }
+        }
+    }
+
+    /// 已保存的常用服务器(含各自最近登录邮箱),UserDefaults 持久化。
+    private(set) var savedServers: [SavedServer] = []
+
+    func rememberServer(_ target: ServerTarget, email: String? = nil) {
+        var list = savedServers
+        let entry = SavedServer(target: target, email: email ?? list.first(where: { $0.target == target })?.email)
+        list.removeAll { $0.target == target }
+        list.insert(entry, at: 0)
+        savedServers = Array(list.prefix(8))
+        persistServers()
+    }
+
+    func removeSavedServer(_ server: SavedServer) {
+        savedServers.removeAll { $0 == server }
+        persistServers()
+    }
+
+    /// 切换到已保存服务器;若已登录且不属于该服务器则登出。
+    func switchToServer(_ server: SavedServer) {
+        guard server.target != serverTarget else { return }
+        if isLoggedIn { logout() }
+        serverTarget = server.target
+    }
+
+    /// 当前服务器最近登录的邮箱,用于登录页预填。
+    var rememberedEmail: String? {
+        savedServers.first(where: { $0.target == serverTarget })?.email
+    }
+
+    private func persistServers() {
+        if let data = try? JSONEncoder().encode(savedServers) {
+            UserDefaults.standard.set(data, forKey: "auth.savedServers")
         }
     }
 
@@ -82,6 +123,10 @@ final class AuthService {
             serverTarget = saved
         } else {
             serverTarget = .local
+        }
+        if let data = UserDefaults.standard.data(forKey: "auth.savedServers"),
+           let list = try? JSONDecoder().decode([SavedServer].self, from: data) {
+            savedServers = list
         }
         if Self.uiTestingMock {
             session = Session(
@@ -179,6 +224,7 @@ final class AuthService {
         try keychain.store(JSONEncoder().encode(newSession))
         previews.removeAll()
         session = newSession
+        rememberServer(serverTarget, email: email)
         RuntimeService.shared.sync(newSession, target: loginTarget, rebuild: true)
         await refreshDevices()
     }

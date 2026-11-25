@@ -8,6 +8,7 @@ struct SessionControlHub: View {
     var onExit: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var prefs = PrefsStore.shared
+    @State private var input = InteractionPrefs.shared
     @State private var confirmExit = false
     @State private var confirmLock = false
     @State private var clipboardMessage: String?
@@ -25,16 +26,41 @@ struct SessionControlHub: View {
                 } header: { Text(watchOnly ? "仅查看设备" : "远程控制") }
                 if !watchOnly {
                     Section {
+                        Picker(selection: $input.touchMode) {
+                            ForEach(TouchInputMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                        } label: { Label("触控模式", rabbitIcon: .cursor) }
+                        if input.touchMode == .trackpad {
+                            HStack {
+                                Label("指针灵敏度", rabbitIcon: .mouse)
+                                Slider(value: $input.pointerSensitivity, in: 0.5...2.5, step: 0.05)
+                                Text(String(format: "%.2fx", input.pointerSensitivity)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Toggle(isOn: $input.directTouchOffset) { Label("直点指尖微偏置", rabbitIcon: .cursor) }
+                        }
+                        Toggle(isOn: $input.naturalScroll) { Label("自然滚动方向", rabbitIcon: .arrowDown) }
                         Toggle(isOn: $showMouseTools) { Label("在桌面上显示鼠标工具", rabbitIcon: .mouse) }
                         NavigationLink { RemoteKeyboard(session: session).modifier(ConnectedTool(session: session)) } label: { Label("远程键盘", rabbitIcon: .keyboard) }
                         NavigationLink { FileTransferView(device: device).modifier(ConnectedTool(session: session)) } label: { Label("文件传输", rabbitIcon: .fileTransfer) }
                         NavigationLink { TerminalView().modifier(ConnectedTool(session: session)) } label: { Label("终端", rabbitIcon: .terminal) }
                         NavigationLink { PortMappingView(device: device).modifier(ConnectedTool(session: session)) } label: { Label("端口映射", rabbitIcon: .portMap) }
                     } header: { Text("工具") } footer: {
-                        Text(canControl ? "轻点桌面是左键，按住移动可拖动。开启鼠标工具后可用右键和滚轮。" : "连接成功后可使用工具。")
+                        Text(canControl ? "轻点左键，长按或双指轻点右键，双指滚动，捏合缩放；触控板模式下轻点后再次触按拖动。" : "连接成功后可使用工具。")
                     }.disabled(!canControl)
                 }
                 Section {
+                    Picker(selection: $input.orientation) {
+                        ForEach(SessionOrientation.allCases, id: \.self) { Text($0.label).tag($0) }
+                    } label: { Label("屏幕方向", rabbitIcon: .display) }
+                    Picker(selection: $input.portraitLayout) {
+                        ForEach(PortraitLayout.allCases, id: \.self) { Text($0.label).tag($0) }
+                    } label: { Label("竖屏布局", rabbitIcon: .display) }
+                    Toggle("控制栏放在左侧", isOn: $input.controlsLeading)
+                    VStack(alignment: .leading) {
+                        Text("控制栏不透明度 \(Int(input.hudAlpha * 100))%")
+                        Slider(value: $input.hudAlpha, in: 0.35...1)
+                            .accessibilityLabel("控制栏不透明度")
+                    }
                     Toggle("显示连接统计", isOn: $prefs.showHUD)
                     if !watchOnly {
                         Picker("画质档位", selection: $prefs.qualityPreset) {
@@ -45,6 +71,10 @@ struct SessionControlHub: View {
                         }
                         .disabled(!canControl)
                     }
+                    Button {
+                        session.requestIDR()
+                    } label: { Label("刷新画面关键帧", rabbitIcon: .arrowRight) }
+                        .disabled(!session.isConnected)
                 } header: { Text("显示") } footer: {
                     Text(watchOnly ? "观看模式不会发送输入或打开远程工具。" : "切换档位会调整本次码率；档位中的帧率在下次连接时生效。")
                 }

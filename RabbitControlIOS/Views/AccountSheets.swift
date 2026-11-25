@@ -106,6 +106,39 @@ struct ServerConfigSheet: View {
                     if isProbing { ProgressView("正在测试…") }
                     else if let probeStatus { Text(probeStatus).font(.footnote) }
                 }
+                if !auth.savedServers.isEmpty {
+                    Section {
+                        ForEach(auth.savedServers) { server in
+                            Button {
+                                draft = server.target
+                                port = String(server.target.effectiveAPIPort)
+                                if !auth.isLoggedIn { auth.switchToServer(server) }
+                            } label: {
+                                HStack {
+                                    Label(server.target.host, rabbitIcon: .server)
+                                        .foregroundStyle(.primary)
+                                    if server.target.useHTTPS {
+                                        Text("HTTPS").font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if server.target == auth.serverTarget {
+                                        Text("当前").font(.caption).foregroundStyle(RCColor.accent)
+                                    }
+                                    if let email = server.email {
+                                        Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                            }
+                            .swipeActions {
+                                Button(role: .destructive) { auth.removeSavedServer(server) } label: {
+                                    Label("删除", rabbitIcon: .trash)
+                                }
+                            }
+                        }
+                    } header: { Text("常用服务器") } footer: {
+                        Text("登录成功后会自动保存服务器并记住邮箱；点选即可切换。")
+                    }
+                }
             }
             .navigationTitle("服务器设置").navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)

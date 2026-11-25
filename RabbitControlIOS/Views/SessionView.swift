@@ -16,7 +16,21 @@ struct SessionView: View {
     @State private var connectionError: String?
     @State private var retryPassword = ""
     @State private var session = SessionService.shared
+    @State private var keyboardBarExpanded = InteractionPrefs.shared.keyboardBarVisible
+    @State private var zoomPan = ZoomPanState()
+    @State private var inputPrefs = InteractionPrefs.shared
+    @State private var showGuide = false
+    @Environment(\.verticalSizeClass) private var verticalClass
     private var watchMode: Bool { mode == .watch || session.peerWatchOnly }
+    /// 竖屏且(选了分屏或智能模式下处于触控板模式)时启用上下分屏。
+    private var splitLayout: Bool {
+        guard verticalClass == .regular, !watchMode else { return false }
+        switch inputPrefs.portraitLayout {
+        case .fullscreen: return false
+        case .splitTrackpad: return true
+        case .auto: return inputPrefs.touchMode == .trackpad
+        }
+    }
     private var failure: String? {
         if case .ended(let reason) = session.state { return reason }
         return connectionError
@@ -26,9 +40,30 @@ struct SessionView: View {
         ZStack {
             RCColor.stageBg.ignoresSafeArea()
             if session.isConnected {
-                RemoteVideoView(session: session, watchOnly: watchMode, showMouseTools: showMouseTools,
-                                previewDeviceID: directAddr == nil ? device.id : nil)
-                    .ignoresSafeArea()
+                if splitLayout {
+                    VStack(spacing: 0) {
+                        RemoteVideoView(session: session, watchOnly: watchMode, showMouseTools: showMouseTools,
+                                        zoomPan: zoomPan, inputEnabled: false,
+                                        previewDeviceID: directAddr == nil ? device.id : nil)
+                            .layoutPriority(1)
+                        ZStack {
+                            RCColor.hudBg
+                            TouchInputView(session: session, zoomPan: zoomPan, watchOnly: watchMode, trackpadOnly: true)
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    RabbitIcon(.mouse, size: 13)
+                                    Text("触控板 · 单指移动 轻点左键 双指右键/滚动")
+                                }.font(.caption2).foregroundStyle(.white.opacity(0.4)).padding(.bottom, 6)
+                            }.allowsHitTesting(false)
+                        }.frame(height: 240)
+                    }.ignoresSafeArea()
+                } else {
+                    RemoteVideoView(session: session, watchOnly: watchMode, showMouseTools: showMouseTools,
+                                    zoomPan: zoomPan,
+                                    previewDeviceID: directAddr == nil ? device.id : nil)
+                        .ignoresSafeArea()
+                }
             } else if let failure {
                 ScrollView {
                   VStack(spacing: 16) {
@@ -52,8 +87,15 @@ struct SessionView: View {
                 }.foregroundStyle(.white)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            VStack(alignment: .trailing, spacing: 8) {
+        .overlay(alignment: .bottom) {
+            if session.isConnected && !watchMode {
+                SessionKeyboardBar(session: session, expanded: $keyboardBarExpanded)
+                    .padding(.bottom, 6)
+                    .onChange(of: keyboardBarExpanded) { InteractionPrefs.shared.keyboardBarVisible = keyboardBarExpanded }
+            }
+        }
+        .overlay(alignment: inputPrefs.controlsLeading ? .topLeading : .topTrailing) {
+            VStack(alignment: inputPrefs.controlsLeading ? .leading : .trailing, spacing: 8) {
                 HStack(spacing: 0) {
                     Button {
                         if session.isConnected { confirmExit = true } else { dismiss() }
@@ -69,9 +111,30 @@ struct SessionView: View {
                 if PrefsStore.shared.showHUD && session.isConnected {
                     SessionHUD(startedAt: startedAt, hud: session.hud).allowsHitTesting(false)
                 }
-            }.padding(.trailing, 12)
+            }
+            .opacity(inputPrefs.hudAlpha)
+            .padding(.horizontal, 12)
         }
         .statusBarHidden().persistentSystemOverlays(.hidden)
+        .overlay {
+            if showGuide {
+                SessionGestureGuide {
+                    inputPrefs.hasSeenGestureGuide = true
+                    withAnimation { showGuide = false }
+                }
+            }
+        }
+        .onAppear {
+            SessionOrientationLock.apply(inputPrefs.orientation)
+            if !inputPrefs.hasSeenGestureGuide, !watchMode, !AuthService.uiTestingMock { showGuide = true }
+        }
+        .onDisappear { SessionOrientationLock.restore() }
+        .onChange(of: session.isConnected) {
+            if session.isConnected {
+                TargetHistory.shared.recordConnect(directAddr ?? device.id.replacingOccurrences(of: " ", with: ""))
+            }
+        }
+        .onChange(of: inputPrefs.orientation) { SessionOrientationLock.apply(inputPrefs.orientation) }
         .task(id: attempt) {
             guard openedAttempt != attempt else { return }
             openedAttempt = attempt

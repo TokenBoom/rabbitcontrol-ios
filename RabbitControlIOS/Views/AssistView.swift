@@ -32,7 +32,10 @@ struct AssistView: View {
     @State private var password = ""
     @State private var mode: DeviceDetailView.SessionMode = .control
     @State private var target: AssistTarget?
+    @State private var history = TargetHistory.shared
+    @State private var quickTab = 0
     private var parsed: AssistTarget? { AssistTarget(input) }
+    private var quickList: [String] { quickTab == 0 ? history.recent : history.favorites }
 
     private var problem: String? {
         guard !input.isEmpty else { return nil }
@@ -84,6 +87,50 @@ struct AssistView: View {
                 .buttonStyle(.borderedProminent).listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 .disabled(parsed == nil || problem != nil)
                 .accessibilityIdentifier("assist.connect")
+            if !history.recent.isEmpty || !history.favorites.isEmpty {
+                Section {
+                    Picker("快速连接", selection: $quickTab) {
+                        Text("最近连接 (\(history.recent.count))").tag(0)
+                        Text("我的收藏 (\(history.favorites.count))").tag(1)
+                    }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    if quickList.isEmpty {
+                        Text(quickTab == 0 ? "暂无最近连接" : "在最近连接中轻点星标即可收藏")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    ForEach(quickList, id: \.self) { item in
+                        HStack {
+                            Button {
+                                input = item
+                                connect()
+                            } label: {
+                                HStack {
+                                    RabbitIcon(item.contains(":") ? .server : .computer, size: 18)
+                                        .foregroundStyle(RCColor.accent)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(Self.display(item)).font(.body.monospacedDigit()).foregroundStyle(.primary)
+                                        if let when = history.lastConnectedText(item) {
+                                            Text(when).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                }.contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                            .accessibilityLabel("连接 \(Self.display(item))")
+                            Button { history.toggleFavorite(item) } label: {
+                                RabbitIcon(history.isFavorite(item) ? .starFilled : .star, size: 18)
+                                    .foregroundStyle(history.isFavorite(item) ? Color.orange : .secondary)
+                                    .frame(width: 36, height: 36)
+                            }.buttonStyle(.plain)
+                            .accessibilityLabel(history.isFavorite(item) ? "取消收藏" : "收藏")
+                        }
+                        .swipeActions {
+                            if quickTab == 0 {
+                                Button(role: .destructive) { history.removeRecent(item) } label: { Label("删除", rabbitIcon: .trash) }
+                            }
+                        }
+                    }
+                } header: { Text("快速连接") }
+            }
         }
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("远程协助")
@@ -104,5 +151,12 @@ struct AssistView: View {
         guard let parsed, problem == nil else { return }
         editing = false
         target = parsed
+    }
+
+    /// 九位码按 3-3-3 分组显示,直连地址原样。
+    static func display(_ item: String) -> String {
+        guard item.count == 9, item.allSatisfy(\.isNumber) else { return item }
+        let chars = Array(item)
+        return "\(String(chars[0..<3])) \(String(chars[3..<6])) \(String(chars[6..<9]))"
     }
 }

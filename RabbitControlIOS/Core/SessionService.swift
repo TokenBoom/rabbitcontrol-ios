@@ -278,6 +278,11 @@ final class SessionService {
         sendCommand(["type": "disconnect"])
     }
 
+    /// 请求远端立即刷新关键帧(画面花屏/卡住时恢复)。
+    func requestIDR() {
+        sendCommand(["type": "request_idr"])
+    }
+
     func setBitrate(_ bps: Int) {
         guard isConnected, !peerWatchOnly else { return }
         sendCommand(["type": "set_bitrate", "bps": bps])

@@ -7,10 +7,19 @@ import RabbitControlCore
 final class ToolService {
     static let shared = ToolService()
 
-    // ── 终端 ──
-    private(set) var termID: UInt32?
-    private(set) var terminalOutput = ""
-    private(set) var terminalExited = false
+    // ── 终端(多会话并存,activeTermID 为当前标签) ──
+    struct TerminalTab: Identifiable, Equatable {
+        let id: UInt32
+        var index: Int
+        var output = ""
+        var exited = false
+    }
+    private(set) var terminals: [TerminalTab] = []
+    private(set) var activeTermID: UInt32?
+    private var terminalSerial = 0
+    var termID: UInt32? { activeTermID }
+    var terminalOutput: String { terminals.first { $0.id == activeTermID }?.output ?? "" }
+    var terminalExited: Bool { terminals.first { $0.id == activeTermID }?.exited ?? false }
 
     // ── 文件 ──
     private(set) var currentPath = "/"
@@ -65,7 +74,7 @@ final class ToolService {
             stop()
             owner = sessionID
             transfers = []; fileEntries = []; portmapRules = []; currentPath = "/"
-            fileError = nil; termID = nil; terminalOutput = ""; lastError = nil
+            fileError = nil; terminals = []; activeTermID = nil; terminalSerial = 0; lastError = nil
         }
         guard pollTask == nil else { return }
         pollTask = Task.detached {
@@ -90,16 +99,22 @@ final class ToolService {
 
     // MARK: - 终端操作
 
+    /// 新开一个终端会话并切为当前标签。
     func terminalOpen(sessionID: UInt64, cols: UInt16 = 80, rows: UInt16 = 24) {
         lastError = nil
-        terminalOutput = ""
-        terminalExited = false
         if let resp = Self.call(sessionID: sessionID, ["op": "terminal_open", "cols": cols, "rows": rows]),
            let id = resp["term_id"] as? NSNumber {
-            termID = id.uint32Value
+            terminalSerial += 1
+            terminals.append(TerminalTab(id: id.uint32Value, index: terminalSerial))
+            activeTermID = id.uint32Value
         } else {
             lastError = "终端打开失败"
         }
+    }
+
+    func terminalSelect(_ id: UInt32) {
+        guard terminals.contains(where: { $0.id == id }) else { return }
+        activeTermID = id
     }
 
     @discardableResult func terminalInput(sessionID: UInt64, text: String) -> Bool {
@@ -107,10 +122,21 @@ final class ToolService {
         return Self.call(sessionID: sessionID, ["op": "terminal_input", "term_id": termID, "text": text])?["ok"] as? Bool == true
     }
 
-    func terminalClose(sessionID: UInt64) {
-        guard let termID else { return }
-        _ = Self.call(sessionID: sessionID, ["op": "terminal_close", "term_id": termID])
-        self.termID = nil
+    /// 关闭指定终端(默认当前标签),切到相邻标签。
+    func terminalClose(sessionID: UInt64, termID id: UInt32? = nil) {
+        guard let target = id ?? activeTermID else { return }
+        _ = Self.call(sessionID: sessionID, ["op": "terminal_close", "term_id": target])
+        let idx = terminals.firstIndex { $0.id == target }
+        terminals.removeAll { $0.id == target }
+        if activeTermID == target {
+            activeTermID = idx.flatMap { terminals.indices.contains($0) ? terminals[$0].id : terminals.last?.id }
+        }
+    }
+
+    func terminalCloseAll(sessionID: UInt64) {
+        for tab in terminals { _ = Self.call(sessionID: sessionID, ["op": "terminal_close", "term_id": tab.id]) }
+        terminals = []
+        activeTermID = nil
     }
 
     // MARK: - 文件操作
@@ -208,16 +234,18 @@ final class ToolService {
                 guard let type = ev["type"] as? String else { continue }
                 switch type {
                 case "output":
-                    guard let termID, (ev["termId"] as? NSNumber)?.uint32Value == termID else { continue }
+                    guard let id = (ev["termId"] as? NSNumber)?.uint32Value,
+                          let idx = terminals.firstIndex(where: { $0.id == id }) else { continue }
                     if let text = ev["textUtf8Lossy"] as? String {
-                        terminalOutput += text
-                        // 移动端内存保护:保留尾部 200k 字符
-                        if terminalOutput.count > 200_000 {
-                            terminalOutput = String(terminalOutput.suffix(150_000))
+                        terminals[idx].output += text
+                        // 移动端内存保护:每个终端保留尾部 200k 字符
+                        if terminals[idx].output.count > 200_000 {
+                            terminals[idx].output = String(terminals[idx].output.suffix(150_000))
                         }
                     }
                 case "exited":
-                    if let termID, (ev["termId"] as? NSNumber)?.uint32Value == termID { terminalExited = true }
+                    if let id = (ev["termId"] as? NSNumber)?.uint32Value,
+                       let idx = terminals.firstIndex(where: { $0.id == id }) { terminals[idx].exited = true }
                 default:
                     break
                 }
