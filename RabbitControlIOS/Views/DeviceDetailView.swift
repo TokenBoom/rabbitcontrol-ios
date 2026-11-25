@@ -95,11 +95,17 @@ struct DeviceDetailView: View {
 
                 // 工具入口(O1 工具项的移动端入口)
                 VStack(spacing: 0) {
-                    toolRow(icon: "folder", title: "文件传输")
+                    toolLink(icon: "folder", title: "文件传输") {
+                        FileTransferView(device: device)
+                    }
                     divider
-                    toolRow(icon: "terminal", title: "终端")
+                    toolLink(icon: "terminal", title: "终端") {
+                        TerminalView()
+                    }
                     divider
-                    toolRow(icon: "network", title: "端口映射")
+                    toolLink(icon: "network", title: "端口映射") {
+                        PortMappingView(device: device)
+                    }
                 }
                 .background(.white, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16)
@@ -119,18 +125,22 @@ struct DeviceDetailView: View {
             .padding(.leading, 56)
     }
 
-    private func toolRow(icon: String, title: String) -> some View {
-        Button {
-            ToastCenter.shared.show("功能开发中")
+    private func toolLink<Destination: View>(
+        icon: String,
+        title: String,
+        @ViewBuilder destination: () -> Destination
+    ) -> some View {
+        NavigationLink {
+            destination()
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 17))
-                    .foregroundStyle(RCColor.accent)
+                    .foregroundStyle(device.online ? RCColor.accent : RCColor.textDisabled)
                     .frame(width: 24)
                 Text(title)
                     .font(.system(size: 14))
-                    .foregroundStyle(RCColor.textPrimary)
+                    .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textDisabled)
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12))

@@ -31,7 +31,13 @@ struct ProfileView: View {
 
                 // 入口列表
                 VStack(spacing: 0) {
-                    row(icon: "gearshape", title: "设置")
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        rowContent(icon: "gearshape", title: "设置")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("profile.设置")
                     divider
                     row(icon: "bell", title: "消息通知")
                     divider
@@ -53,25 +59,29 @@ struct ProfileView: View {
             .padding(.leading, 56)
     }
 
+    private func rowContent(icon: String, title: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(RCColor.accent)
+                .frame(width: 24)
+            Text(title)
+                .font(.system(size: 14))
+                .foregroundStyle(RCColor.textPrimary)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundStyle(RCColor.textDisabled)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+    }
+
     private func row(icon: String, title: String) -> some View {
         Button {
             ToastCenter.shared.show("功能开发中")
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 18))
-                    .foregroundStyle(RCColor.accent)
-                    .frame(width: 24)
-                Text(title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(RCColor.textPrimary)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
-                    .foregroundStyle(RCColor.textDisabled)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 52)
+            rowContent(icon: icon, title: title)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("profile.\(title)")

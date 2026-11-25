@@ -11,6 +11,7 @@ struct SessionView: View {
     @State private var hudVisible = true
     @State private var quality = "超清 14M"
     @State private var frameRate = "144 帧"
+    @State private var showSecurity = false
 
     private var watchMode: Bool { mode == .watch }
 
@@ -63,13 +64,17 @@ struct SessionView: View {
             .accessibilityIdentifier("session.toggleHUD")
         }
         .statusBarHidden(true)
+        .sheet(isPresented: $showSecurity) {
+            SecurityStatusView()
+                .presentationDetents([.medium])
+        }
     }
 
     private var topBar: some View {
         HStack(spacing: 10) {
-            // 安全状态(占位)
+            // 安全状态(S2)
             Button {
-                ToastCenter.shared.show("功能开发中")
+                showSecurity = true
             } label: {
                 Image(systemName: "shield")
                     .font(.system(size: 16))
@@ -200,5 +205,125 @@ struct SessionHUD: View {
         let m = (seconds % 3600) / 60
         let s = seconds % 60
         return String(format: "%02d:%02d:%02d", h, m, s)
+    }
+}
+
+/// S2 安全状态面板:防窥模式 Select + 被控静音/自动锁屏 Switch。
+/// 「需关注」琥珀 pill 判定:防窥模式=「关闭」或自动锁屏=关时显示(设计规范 S2)。
+struct SecurityStatusView: View {
+    @State private var privacyMode = "隐私屏保"
+    @State private var muted = false
+    @State private var autoLock = false
+
+    private let privacyOptions = ["隐私屏保", "黑屏", "关闭"]
+
+    private var needsAttention: Bool {
+        privacyMode == "关闭" || !autoLock
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("安全状态")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(RCColor.textPrimary)
+                Spacer()
+                if needsAttention {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 11))
+                        Text("需关注")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundStyle(RCColor.warning)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(Color(hex: 0xFFF7E8), in: Capsule())
+                    .accessibilityIdentifier("security.attention")
+                }
+            }
+
+            // 防窥模式
+            HStack(spacing: 12) {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 16))
+                    .foregroundStyle(RCColor.textSecondary)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("防窥模式")
+                        .font(.system(size: 14))
+                        .foregroundStyle(RCColor.textPrimary)
+                    Text("被控端屏幕已防护,遮挡屏幕内容")
+                        .font(.system(size: 12))
+                        .foregroundStyle(RCColor.textSecondary)
+                }
+                Spacer()
+                Menu {
+                    ForEach(privacyOptions, id: \.self) { option in
+                        Button {
+                            privacyMode = option
+                        } label: {
+                            if option == privacyMode {
+                                Label(option, systemImage: "checkmark")
+                            } else {
+                                Text(option)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(privacyMode)
+                            .font(.system(size: 13))
+                            .foregroundStyle(RCColor.textPrimary)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10))
+                            .foregroundStyle(RCColor.textSecondary)
+                    }
+                }
+                .accessibilityIdentifier("security.privacyMode")
+            }
+
+            // 被控静音
+            HStack(spacing: 12) {
+                Image(systemName: muted ? "speaker.slash" : "speaker.wave.2")
+                    .font(.system(size: 16))
+                    .foregroundStyle(RCColor.textSecondary)
+                    .frame(width: 24)
+                Text("被控静音")
+                    .font(.system(size: 14))
+                    .foregroundStyle(RCColor.textPrimary)
+                Text(muted ? "已静音" : "已外放")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RCColor.textSecondary)
+                Spacer()
+                Toggle("", isOn: $muted)
+                    .labelsHidden()
+                    .tint(RCColor.accent)
+                    .accessibilityIdentifier("security.muted")
+            }
+
+            // 自动锁屏
+            HStack(spacing: 12) {
+                Image(systemName: "lock")
+                    .font(.system(size: 16))
+                    .foregroundStyle(RCColor.textSecondary)
+                    .frame(width: 24)
+                Text("自动锁屏")
+                    .font(.system(size: 14))
+                    .foregroundStyle(RCColor.textPrimary)
+                Text(autoLock ? "已开启" : "未开启")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RCColor.textSecondary)
+                Spacer()
+                Toggle("", isOn: $autoLock)
+                    .labelsHidden()
+                    .tint(RCColor.accent)
+                    .accessibilityIdentifier("security.autoLock")
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
     }
 }
