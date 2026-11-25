@@ -164,8 +164,35 @@ final class AuthService {
             }
         } else if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let error = obj["error"] as? String {
-            await MainActor.run { devicesError = error }
+            if error.contains("token_expired"), await refreshTokens() {
+                await refreshDevices()
+            } else {
+                await MainActor.run { devicesError = error }
+            }
         }
+    }
+
+    /// 用 refresh token 轮换访问令牌,成功返回 true 并持久化新会话。
+    @discardableResult
+    private func refreshTokens() async -> Bool {
+        guard let session else { return false }
+        var payload = serverPayload()
+        payload["refresh_token"] = session.refreshToken
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: jsonData, encoding: .utf8) else { return false }
+        let raw = await Task.detached(priority: .userInitiated) {
+            Self.withRustString(json.withCString { rc_auth_refresh($0) })
+        }.value
+        guard let raw, let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let access = obj["access_token"] as? String,
+              let refresh = obj["refresh_token"] as? String else { return false }
+        var updated = session
+        updated.accessToken = access
+        updated.refreshToken = refresh
+        self.session = updated
+        persist()
+        return true
     }
 
     func startAutoRefresh() {

@@ -60,7 +60,20 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+    private var drawCount = 0
+    private var fallbackY: MTLTexture?
+    private var fallbackUV: MTLTexture?
+    private var fallbackSize = CGSize.zero
+    private static var pixelFormatLogged = false
+    nonisolated(unsafe) static var diagInfo = ""
+    nonisolated(unsafe) static var diagError = ""
+
     func draw(in view: MTKView) {
+        // 帧链路诊断:每 ~2s 把 Rust 侧计数写到 Documents,供联调读取
+        drawCount += 1
+        if drawCount % 120 == 1 {
+            Self.writeFrameStats()
+        }
         // 取最新帧(所有权转入本函数,用毕归还)
         guard let json = Self.takeFrameJSON(),
               let data = json.data(using: .utf8),
@@ -89,16 +102,36 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
 
+        // 一次性诊断:记录像素格式/平面数/纹理创建结果,定位模拟器黑屏
+        if !Self.pixelFormatLogged {
+            Self.pixelFormatLogged = true
+            let fmt4cc = CVPixelBufferGetPixelFormatType(pixelBuffer)
+            let planes = CVPixelBufferGetPlaneCount(pixelBuffer)
+            let iosurface = CVPixelBufferGetIOSurface(pixelBuffer) != nil
+            let cc = String(format: "%c%c%c%c", (fmt4cc >> 24) & 0xff, (fmt4cc >> 16) & 0xff, (fmt4cc >> 8) & 0xff, fmt4cc & 0xff)
+            Self.diagInfo = "fmt=\(cc)(\(fmt4cc)) planes=\(planes) iosurface=\(iosurface) \(w)x\(h)"
+        }
+
         func makeTexture(_ plane: Int, _ pw: Int, _ ph: Int, _ fmt: MTLPixelFormat) -> MTLTexture? {
             var texOut: CVMetalTexture?
             let ok = CVMetalTextureCacheCreateTextureFromImage(
                 nil, cache, pixelBuffer, nil, fmt, pw, ph, plane, &texOut)
-            guard ok == kCVReturnSuccess, let t = texOut else { return nil }
+            if ok != kCVReturnSuccess {
+                Self.diagError = "plane\(plane) err=\(ok)"
+                return nil
+            }
+            guard let t = texOut else { return nil }
             return CVMetalTextureGetTexture(t)
         }
 
-        guard let texY = makeTexture(0, w, h, .r8Unorm),
-              let texUV = makeTexture(1, w / 2, h / 2, .rg8Unorm),
+        // 零拷贝优先;模拟器 VT 输出非 IOSurface 支撑(err -6660)时回退 CPU 上传
+        var texY = makeTexture(0, w, h, .r8Unorm)
+        var texUV = makeTexture(1, w / 2, h / 2, .rg8Unorm)
+        if texY == nil || texUV == nil {
+            (texY, texUV) = uploadViaCPU(pixelBuffer, w: w, h: h)
+        }
+
+        guard let texY, let texUV,
               let buf = commandQueue.makeCommandBuffer(),
               let enc = buf.makeRenderCommandEncoder(descriptor: pass) else { return }
 
@@ -110,6 +143,45 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
         buf.present(drawable)
         buf.commit()
         hasFrame = true
+    }
+
+    /// CPU 上传回退:直接锁像素缓冲拷进普通 MTLTexture(不依赖 IOSurface)。
+    /// 模拟器 VT 解码输出非 IOSurface 支撑缓冲,零拷贝纹理缓存拒绝(err -6660),走此路径。
+    private func uploadViaCPU(_ pb: CVPixelBuffer, w: Int, h: Int) -> (MTLTexture?, MTLTexture?) {
+        if fallbackSize.width != CGFloat(w) || fallbackSize.height != CGFloat(h) {
+            let descY = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .r8Unorm, width: w, height: h, mipmapped: false)
+            descY.usage = .shaderRead
+            let descUV = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rg8Unorm, width: w / 2, height: h / 2, mipmapped: false)
+            descUV.usage = .shaderRead
+            fallbackY = device.makeTexture(descriptor: descY)
+            fallbackUV = device.makeTexture(descriptor: descUV)
+            fallbackSize = CGSize(width: w, height: h)
+        }
+        guard let ty = fallbackY, let tuv = fallbackUV else { return (nil, nil) }
+
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+
+        guard let baseY = CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+              let baseUV = CVPixelBufferGetBaseAddressOfPlane(pb, 1) else { return (nil, nil) }
+        let strideY = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+        let strideUV = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+        ty.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                   withBytes: baseY, bytesPerRow: strideY)
+        tuv.replace(region: MTLRegionMake2D(0, 0, w / 2, h / 2), mipmapLevel: 0,
+                    withBytes: baseUV, bytesPerRow: strideUV)
+        return (ty, tuv)
+    }
+
+    private static func writeFrameStats() {
+        guard let ptr = rc_apple_media_stats() else { return }
+        let stats = String(cString: ptr)
+        rc_string_free(ptr)
+        guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let line = stats + " | " + diagInfo + " | " + diagError
+        try? line.write(to: dir.appendingPathComponent("frame-stats.txt"), atomically: true, encoding: .utf8)
     }
 
     private static func takeFrameJSON() -> String? {
