@@ -100,7 +100,7 @@ struct ServerConfigSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        auth.serverTarget = .init(host: host, useHTTPS: useHTTPS)
+                        auth.serverTarget = .init(host: host, useHTTPS: useHTTPS, caCertPem: auth.serverTarget.caCertPem)
                         dismiss()
                     }
                     .disabled(host.isEmpty)

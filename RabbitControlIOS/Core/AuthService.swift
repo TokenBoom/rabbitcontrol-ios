@@ -13,6 +13,14 @@ final class AuthService {
     struct ServerTarget: Codable, Hashable {
         var host: String
         var useHTTPS: Bool
+        /// TOFU 信任的 CA PEM(probe 时抓取);HTTPS 模式下校验用。
+        var caCertPem: String?
+
+        init(host: String, useHTTPS: Bool, caCertPem: String? = nil) {
+            self.host = host
+            self.useHTTPS = useHTTPS
+            self.caCertPem = caCertPem
+        }
 
         static let local = ServerTarget(host: "127.0.0.1", useHTTPS: false)
     }
@@ -90,15 +98,11 @@ final class AuthService {
         email: String,
         password: String
     ) async throws {
-        let target = serverTarget
-        let payload: [String: Any] = [
-            "server_host": target.host,
-            "use_https": target.useHTTPS,
-            "email": email,
-            "password": password,
-            "hostname": UIDevice.current.name,
-            "os": "ios",
-        ]
+        var payload = serverPayload()
+        payload["email"] = email
+        payload["password"] = password
+        payload["hostname"] = UIDevice.current.name
+        payload["os"] = "ios"
         let json = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
         let raw = await Task.detached(priority: .userInitiated) {
             Self.withRustString(json.withCString {
@@ -123,8 +127,8 @@ final class AuthService {
             refreshToken: refresh,
             email: email,
             displayName: displayName,
-            serverHost: target.host,
-            useHTTPS: target.useHTTPS
+            serverHost: serverTarget.host,
+            useHTTPS: serverTarget.useHTTPS
         )
         await MainActor.run {
             session = newSession
@@ -144,11 +148,8 @@ final class AuthService {
     func refreshDevices() async {
         if Self.uiTestingMock { return }
         guard let session else { return }
-        let payload: [String: Any] = [
-            "server_host": session.serverHost,
-            "use_https": session.useHTTPS,
-            "access_token": session.accessToken,
-        ]
+        var payload = serverPayload()
+        payload["access_token"] = session.accessToken
         guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: jsonData, encoding: .utf8) else { return }
         let raw = await Task.detached(priority: .userInitiated) {
@@ -212,7 +213,9 @@ final class AuthService {
     }
 
     private func serverPayload() -> [String: Any] {
-        ["server_host": serverTarget.host, "use_https": serverTarget.useHTTPS]
+        var p: [String: Any] = ["server_host": serverTarget.host, "use_https": serverTarget.useHTTPS]
+        if let ca = serverTarget.caCertPem { p["ca_cert_pem"] = ca }
+        return p
     }
 
     private static func errorMessage(in raw: String?) -> String? {
@@ -230,6 +233,11 @@ final class AuthService {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let latency = obj["latency_ms"] as? Int else {
             return .failure(.noResponse)
+        }
+        // TOFU:抓取服务端 CA 供后续 HTTPS/信令 TLS 校验
+        if let bundle = obj["ca_bundle"] as? [String: Any],
+           let pem = bundle["ca_cert_pem"] as? String {
+            serverTarget.caCertPem = pem
         }
         return .success(latency)
     }

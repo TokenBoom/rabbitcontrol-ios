@@ -23,11 +23,15 @@ final class RuntimeService {
         guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("runtime", isDirectory: true) else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let payload = Self.jsonString([
+        var dict: [String: Any] = [
             "server_host": serverHost,
             "use_https": useHTTPS,
             "data_dir": dir.path,
-        ])
+        ]
+        if let ca = AuthService.shared.serverTarget.caCertPem {
+            dict["ca_cert_pem"] = ca
+        }
+        let payload = Self.jsonString(dict)
         guard let payload else { return }
         if let resp = Self.callSyncJSON(payload, rc_runtime_init),
            resp["error"] == nil {
