@@ -41,7 +41,7 @@ final class RabbitControlIOSUITests: XCTestCase {
         let target = app.textFields["assist.partnerID"]
         target.tap(); target.typeText("123")
         app.buttons["清除连接目标"].tap()
-        XCTAssertEqual(target.value as? String, "设备 ID 或 IP:端口")
+        XCTAssertEqual(target.value as? String, "九位设备 ID 或 IP:端口")
         // 协助页是底部 Tab,底栏在协助页可见、进会话后隐藏
         XCTAssertTrue(app.buttons["tab.我的设备"].exists)
         let field = app.textFields["assist.partnerID"]
@@ -91,10 +91,16 @@ final class RabbitControlIOSUITests: XCTestCase {
         XCTAssertFalse(app.buttons["tab.我的"].exists)
         capture("login-page", app: app)
         app.buttons["服务器设置"].tap()
+        let addServer = app.buttons["server.add"]
+        XCTAssertTrue(addServer.waitForExistence(timeout: 5))
+        addServer.tap()
         let host = app.textFields["服务器主机名或 IP"]
+        XCTAssertTrue(host.waitForExistence(timeout: 5))
         host.tap(); host.typeText("/path")
-        XCTAssertFalse(app.buttons["保存"].isEnabled)
-        XCTAssertFalse(app.buttons["测试连接"].isEnabled)
+        XCTAssertFalse(app.buttons["server.editor.save"].isEnabled)
+        XCTAssertFalse(app.buttons["server.editor.testConnection"].isEnabled)
+        app.buttons["server.editor.cancel"].tap()
+        XCTAssertTrue(app.buttons["关闭"].waitForExistence(timeout: 5))
         app.buttons["关闭"].tap()
         XCTAssertTrue(app.buttons["login.submit"].waitForExistence(timeout: 5))
     }

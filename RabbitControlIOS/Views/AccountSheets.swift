@@ -376,6 +376,7 @@ private struct ServerEditorSheet: View {
                         }
                     }
                     .disabled(!valid || isProbing)
+                    .accessibilityIdentifier("server.editor.testConnection")
                     if let probeStatus {
                         Text(probeStatus)
                             .font(.footnote)
@@ -392,6 +393,7 @@ private struct ServerEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .accessibilityIdentifier("server.editor.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
@@ -405,6 +407,7 @@ private struct ServerEditorSheet: View {
                         dismiss()
                     }
                     .disabled(!valid || isProbing)
+                    .accessibilityIdentifier("server.editor.save")
                 }
             }
         }
