@@ -1,6 +1,6 @@
 # RabbitControl iOS (`TokenBoom/rabbitcontrol-ios`)
 
-RabbitControl iOS 客户端，基于 SwiftUI 构建。当前仓库是应用骨架：工程、测试与 CI 已就绪，尚未接入 [`TokenBoom/rabbitcontrol-core`](https://github.com/TokenBoom/rabbitcontrol-core) 的传输与远控能力，根视图仍是占位页面。
+RabbitControl iOS 客户端，基于 SwiftUI 构建。当前仓库已实现移动端 UI（可控设备列表、远程协助、我的、设备详情与远控会话界面），数据全部为 mock（与设计文档 §6.0 对齐），尚未接入 [`TokenBoom/rabbitcontrol-core`](https://github.com/TokenBoom/rabbitcontrol-core) 的传输与远控能力，会话画面为占位。
 
 ## 仓库结构
 
