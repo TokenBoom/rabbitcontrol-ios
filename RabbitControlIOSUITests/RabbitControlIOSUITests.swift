@@ -1,10 +1,17 @@
 import XCTest
 
 final class RabbitControlIOSUITests: XCTestCase {
+
+    /// 注入 mock 认证,UI 测试不依赖真实服务端。
+    private func makeApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uiTestingMockAuth"]
+        return app
+    }
     // XCUITest 的 API 隔离在 MainActor;测试方法需要显式标注,类本身则不能整体隔离
     @MainActor
     func testRootViewShowsDeviceList() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         let title = app.staticTexts["root.title"]
@@ -15,7 +22,7 @@ final class RabbitControlIOSUITests: XCTestCase {
 
     @MainActor
     func testDeviceDetailEntersSession() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         app.buttons["device.mac-mini"].tap()
@@ -30,7 +37,7 @@ final class RabbitControlIOSUITests: XCTestCase {
 
     @MainActor
     func testAssistTabShowsPartnerCard() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         app.buttons["tab.远程协助"].tap()
@@ -42,7 +49,7 @@ final class RabbitControlIOSUITests: XCTestCase {
 
     @MainActor
     func testAssistConnectDisabledWithoutInput() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         app.buttons["tab.远程协助"].tap()
@@ -59,7 +66,7 @@ final class RabbitControlIOSUITests: XCTestCase {
 
     @MainActor
     func testProfileTabShowsAccount() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         app.buttons["tab.我的"].tap()
@@ -69,7 +76,7 @@ final class RabbitControlIOSUITests: XCTestCase {
 
     @MainActor
     func testDeviceDetailOpensFileTransfer() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         app.buttons["device.mac-mini"].tap()
@@ -85,7 +92,7 @@ final class RabbitControlIOSUITests: XCTestCase {
 
     @MainActor
     func testPortMappingAddValidation() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         app.buttons["device.mac-mini"].tap()
@@ -103,7 +110,7 @@ final class RabbitControlIOSUITests: XCTestCase {
     /// 遍历主要界面并截图,附件随测试结果导出,供设计走查。
     @MainActor
     func testCaptureScreenshots() throws {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         func shot(_ name: String) {

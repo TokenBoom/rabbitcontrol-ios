@@ -1,28 +1,68 @@
 import SwiftUI
 
 /// 「我的设备」主页:可控设备列表,在线/离线分组折叠(移动端适配版 P1/P3)。
+///
+/// 数据源为**登录账号的设备**;局域网发现不作为独立设备来源,
+/// 仅在发现的节点与本账号设备匹配(device_id)时,标记 LAN 直连可用。
 struct DeviceListView: View {
-    @State private var devices = MockData.devices
     @State private var onlineExpanded = true
     @State private var offlineExpanded = true
-    @State private var lanExpanded = true
 
+    private var auth: AuthService { .shared }
     private var lanService: LANDiscoveryService { .shared }
+
+    /// 局域网发现的设备 ID 集合(原始 + 去空格格式化两种形式)。
+    private var lanDeviceIDs: Set<String> {
+        Set(lanService.peers.compactMap(\.deviceID).flatMap { [$0, $0.replacingOccurrences(of: " ", with: "")] })
+    }
+
+    private var devices: [Device] {
+        auth.devices.map { accountDevice in
+            let compactID = accountDevice.deviceID.replacingOccurrences(of: " ", with: "")
+            let formattedCompact = accountDevice.formattedID.replacingOccurrences(of: " ", with: "")
+            return Device(
+                id: accountDevice.deviceID,
+                name: accountDevice.displayName,
+                kind: Device.Kind(osString: accountDevice.os),
+                online: accountDevice.online,
+                isLocal: lanDeviceIDs.contains(compactID) || lanDeviceIDs.contains(formattedCompact),
+                wallpaper: Device.Wallpaper(hashSeed: accountDevice.deviceID)
+            )
+        }
+    }
 
     private var onlineDevices: [Device] { devices.filter(\.online) }
     private var offlineDevices: [Device] { devices.filter { !$0.online } }
 
     var body: some View {
+        Group {
+            if auth.isLoggedIn {
+                deviceList
+            } else {
+                LoginView()
+            }
+        }
+        .background(RCColor.bgPage)
+        .navigationBarHidden(true)
+        .task {
+            await auth.refreshDevices()
+            auth.startAutoRefresh()
+        }
+    }
+
+    private var deviceList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
 
-                if !lanService.peers.isEmpty {
-                    LANPeerSection(
-                        count: lanService.peers.count,
-                        expanded: $lanExpanded,
-                        peers: lanService.peers
-                    )
+                if let error = auth.devicesError {
+                    Text("设备列表刷新失败:\(error)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(RCColor.danger)
+                }
+
+                if devices.isEmpty && auth.devicesError == nil {
+                    emptyState
                 }
 
                 DeviceSection(
@@ -44,8 +84,26 @@ struct DeviceListView: View {
             // 给悬浮 tab 条留出不遮挡列表的空间
             .padding(.bottom, 110)
         }
-        .background(RCColor.bgPage)
-        .navigationBarHidden(true)
+        .refreshable {
+            await auth.refreshDevices()
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "laptopcomputer.and.iphone")
+                .font(.system(size: 36))
+                .foregroundStyle(RCColor.textDisabled)
+            Text("暂无设备")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(RCColor.textSecondary)
+            Text("在你的其他设备上登录同一账号后,会显示在这里")
+                .font(.system(size: 12))
+                .foregroundStyle(RCColor.textDisabled)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
     }
 
     private var header: some View {
@@ -161,9 +219,19 @@ struct DeviceCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(device.name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textSecondary)
+                HStack(spacing: 6) {
+                    Text(device.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textSecondary)
+                    if device.isLocal {
+                        Text("LAN")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(RCColor.online, in: Capsule())
+                    }
+                }
                 Image(systemName: platformIcon)
                     .font(.system(size: 14))
                     .foregroundStyle(device.online ? RCColor.accent : RCColor.textDisabled)
@@ -176,94 +244,5 @@ struct DeviceCard: View {
         .padding(8)
         .background(.white, in: RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
-    }
-}
-
-/// 局域网发现分组:展示 core 真实发现的在线被控端(第一块真实数据切片,替换 mock 的验证床)。
-struct LANPeerSection: View {
-    var count: Int
-    @Binding var expanded: Bool
-    var peers: [LANPeer]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text("局域网发现 \(count)")
-                        .font(.system(size: 14))
-                        .foregroundStyle(RCColor.textSecondary)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 12))
-                        .foregroundStyle(RCColor.textSecondary)
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("section.局域网发现")
-
-            if expanded {
-                VStack(spacing: 10) {
-                    ForEach(peers) { peer in
-                        LANPeerCard(peer: peer)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// 局域网节点卡片:名称 + 直连地址 + 密码锁标识。
-struct LANPeerCard: View {
-    var peer: LANPeer
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(RCColor.accent)
-                    .frame(width: 48, height: 48)
-                Image(systemName: "laptopcomputer")
-                    .font(.system(size: 20))
-                    .foregroundStyle(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(peer.name)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(RCColor.textPrimary)
-                    if peer.requiresPassword {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(RCColor.textSecondary)
-                    }
-                }
-                Text(peer.addr)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(RCColor.textSecondary)
-                if let deviceID = peer.deviceID {
-                    Text("ID \(deviceID)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(RCColor.textSecondary)
-                }
-            }
-            Spacer()
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(RCColor.online)
-                    .frame(width: 6, height: 6)
-                Text("LAN")
-                    .font(.system(size: 11))
-                    .foregroundStyle(RCColor.textSecondary)
-            }
-        }
-        .padding(8)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
-        .accessibilityIdentifier("lan.\(peer.instanceID)")
     }
 }

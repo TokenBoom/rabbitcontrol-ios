@@ -23,3 +23,24 @@ struct Device: Identifiable, Hashable {
     let isLocal: Bool
     let wallpaper: Wallpaper
 }
+
+extension Device.Kind {
+    /// 由服务端 os 字段推断设备类型。
+    init(osString: String) {
+        switch osString.lowercased() {
+        case "macos", "mac": self = .mac
+        case "windows", "win": self = .windows
+        case "ios", "ipados": self = .tablet
+        case "android": self = .phone
+        default: self = .mac
+        }
+    }
+}
+
+extension Device.Wallpaper {
+    /// 由设备 ID 稳定选择壁纸(占位视觉,后续由真实截图替换)。
+    init(hashSeed: String) {
+        let all: [Device.Wallpaper] = [.sunset, .coast, .lake]
+        self = all[abs(hashSeed.hashValue) % all.count]
+    }
+}

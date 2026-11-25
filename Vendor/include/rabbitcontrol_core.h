@@ -27,6 +27,26 @@ void rc_lan_discovery_stop(void);
 /// 未启动时返回 "[]"。用后必须 `rc_string_free` 释放。
 char *rc_lan_peers_json(void);
 
+// ── 认证与账号设备(全部阻塞式,禁止主线程调用;JSON 进/出)──
+// 统一错误信封:{"error": "...", "kind": "unauthorized|token_reuse|password_change_required|registration_disabled|other"}
+
+/// 探测服务器:{"server_host","api_port"?,"use_https"?,"ca_cert_pem"?,"expected_ca_fingerprint_sha256"?}
+/// 返回 ServerProbeResult JSON。
+char *rc_server_probe(const char *json);
+
+/// 邮箱登录:{server..., "email","password","device_key"?,"hostname"?,"os"?,"device_pubkey"?}
+/// 返回 AuthTokenResponse JSON(access_token/refresh_token/expires_in_sec/user?/device?)。
+char *rc_auth_login(const char *json);
+
+/// 邮箱注册:同 rc_auth_login,另含可选 "display_name"。
+char *rc_auth_register(const char *json);
+
+/// 轮换 Refresh Token:{server..., "refresh_token"}。
+char *rc_auth_refresh(const char *json);
+
+/// 账号设备列表:{server..., "access_token"};返回 MyDeviceInfo 数组 JSON。
+char *rc_auth_list_devices(const char *json);
+
 #ifdef __cplusplus
 }
 #endif
