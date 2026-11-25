@@ -39,6 +39,14 @@ final class SessionService {
 
     // MARK: - 生命周期
 
+    /// 收养已由运行时(信令)建立的会话,接管轮询与输入。
+    func adopt(sessionID id: UInt64) {
+        close()
+        sessionID = id
+        state = .connecting(phase: "endpoint_creating")
+        startPolling()
+    }
+
     /// 直连打开会话(LAN 或手动输入地址)。
     func open(connectAddr: String, password: String?, watchOnly: Bool) {
         close()

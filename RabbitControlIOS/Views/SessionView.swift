@@ -96,9 +96,7 @@ struct SessionView: View {
         .statusBarHidden(true)
         .onAppear {
             guard useRealSession, !session.isActive else { return }
-            if let addr = resolvedAddr {
-                session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
-            }
+            openSession()
         }
         .onDisappear {
             session.close()
@@ -106,6 +104,35 @@ struct SessionView: View {
         .sheet(isPresented: $showSecurity) {
             SecurityStatusView()
                 .presentationDetents([.medium])
+        }
+    }
+
+    /// 账号设备(9 位设备码)且信令在线 → 一键连接(三阶路由+免密);
+    /// 否则回退直连地址。
+    private func openSession() {
+        let digits = device.id.filter { $0.isNumber }
+        if digits.count == 9, RuntimeService.shared.signalRunning {
+            Task {
+                do {
+                    let result = try await RuntimeService.connect(
+                        targetID: digits,
+                        watchOnly: watchMode,
+                        lanDirectAddr: resolvedAddr
+                    )
+                    await MainActor.run {
+                        session.adopt(sessionID: result.sessionID)
+                    }
+                } catch {
+                    // 信令连接失败回退直连
+                    if let addr = resolvedAddr {
+                        await MainActor.run {
+                            session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
+                        }
+                    }
+                }
+            }
+        } else if let addr = resolvedAddr {
+            session.open(connectAddr: addr, password: nil, watchOnly: watchMode)
         }
     }
 
