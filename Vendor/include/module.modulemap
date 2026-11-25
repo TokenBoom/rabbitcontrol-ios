@@ -1,0 +1,4 @@
+module RabbitControlCore {
+    header "rabbitcontrol_core.h"
+    export *
+}

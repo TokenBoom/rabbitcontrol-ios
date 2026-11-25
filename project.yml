@@ -30,9 +30,14 @@ targets:
     sources:
       - path: RabbitControlIOS
         type: syncedFolder
+    dependencies:
+      # rabbitcontrol-core 移动端 FFI 静态库,由 scripts/build-core-xcframework.sh 生成(静态链接,不嵌入)
+      - framework: Vendor/RabbitControlCore.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios
+        CODE_SIGN_ENTITLEMENTS: RabbitControlIOS/RabbitControlIOS.entitlements
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # 不单独维护 Info.plist，由下列构建设置生成
         GENERATE_INFOPLIST_FILE: "YES"

@@ -5,6 +5,9 @@ struct DeviceListView: View {
     @State private var devices = MockData.devices
     @State private var onlineExpanded = true
     @State private var offlineExpanded = true
+    @State private var lanExpanded = true
+
+    private var lanService: LANDiscoveryService { .shared }
 
     private var onlineDevices: [Device] { devices.filter(\.online) }
     private var offlineDevices: [Device] { devices.filter { !$0.online } }
@@ -13,6 +16,14 @@ struct DeviceListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+
+                if !lanService.peers.isEmpty {
+                    LANPeerSection(
+                        count: lanService.peers.count,
+                        expanded: $lanExpanded,
+                        peers: lanService.peers
+                    )
+                }
 
                 DeviceSection(
                     title: "在线设备",
@@ -165,5 +176,94 @@ struct DeviceCard: View {
         .padding(8)
         .background(.white, in: RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
+    }
+}
+
+/// 局域网发现分组:展示 core 真实发现的在线被控端(第一块真实数据切片,替换 mock 的验证床)。
+struct LANPeerSection: View {
+    var count: Int
+    @Binding var expanded: Bool
+    var peers: [LANPeer]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("局域网发现 \(count)")
+                        .font(.system(size: 14))
+                        .foregroundStyle(RCColor.textSecondary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12))
+                        .foregroundStyle(RCColor.textSecondary)
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("section.局域网发现")
+
+            if expanded {
+                VStack(spacing: 10) {
+                    ForEach(peers) { peer in
+                        LANPeerCard(peer: peer)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 局域网节点卡片:名称 + 直连地址 + 密码锁标识。
+struct LANPeerCard: View {
+    var peer: LANPeer
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(RCColor.accent)
+                    .frame(width: 48, height: 48)
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(peer.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RCColor.textPrimary)
+                    if peer.requiresPassword {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(RCColor.textSecondary)
+                    }
+                }
+                Text(peer.addr)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(RCColor.textSecondary)
+                if let deviceID = peer.deviceID {
+                    Text("ID \(deviceID)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(RCColor.textSecondary)
+                }
+            }
+            Spacer()
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(RCColor.online)
+                    .frame(width: 6, height: 6)
+                Text("LAN")
+                    .font(.system(size: 11))
+                    .foregroundStyle(RCColor.textSecondary)
+            }
+        }
+        .padding(8)
+        .background(.white, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
+        .accessibilityIdentifier("lan.\(peer.instanceID)")
     }
 }
