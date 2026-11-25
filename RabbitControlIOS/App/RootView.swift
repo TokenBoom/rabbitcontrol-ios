@@ -32,18 +32,22 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 if auth.isLoggedIn, !AssistFlow.shared.sessionActive {
-                    HStack(spacing: 4) {
-                        homeAction("设备", id: "我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
-                        homeAction("协助", id: "远程协助", icon: .remoteAssist, selected: selection == .assist) { selection = .assist }
-                        homeAction("我的", id: "我的", icon: .person, selected: selection == .profile) { selection = .profile }
+                    VStack(spacing: 0) {
+                        RCColor.divider.frame(height: 0.5)
+                        HStack(spacing: 0) {
+                            homeAction("我的设备", id: "我的设备", icon: .devices, selected: selection == .devices) { selection = .devices }
+                            homeAction("远程协助", id: "远程协助", icon: .remoteAssist, selected: selection == .assist) { selection = .assist }
+                            homeAction("我的", id: "我的", icon: .person, selected: selection == .profile) { selection = .profile }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 49)
                     }
-                    .padding(4)
-                    .background(.regularMaterial, in: Capsule())
-                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
-                    .frame(maxWidth: 256)
-                    .padding(.top, 4)
-                    .padding(.bottom, 2)
+                    .frame(maxWidth: .infinity)
+                    .background {
+                        Rectangle()
+                            .fill(.regularMaterial)
+                            .ignoresSafeArea(edges: .bottom)
+                    }
                 }
             }
             .background(RCColor.bgPage.ignoresSafeArea())
@@ -54,12 +58,13 @@ struct RootView: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                RabbitIcon(icon, size: 20)
+                RabbitIcon(icon, size: 22)
+                    .frame(width: 42, height: 26)
+                    .background(selected ? RCColor.accent.opacity(0.12) : .clear, in: Capsule())
                 Text(title).font(.system(size: 11, weight: selected ? .semibold : .regular))
             }
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundStyle(selected ? RCColor.accent : RCColor.textSecondary)
-            .background(selected ? RCColor.accent.opacity(0.12) : .clear, in: Capsule())
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

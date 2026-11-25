@@ -15,6 +15,21 @@ final class RabbitControlIOSUITests: XCTestCase {
         return app
     }
 
+    @MainActor func testBottomTabsUseStandardFullWidthSize() {
+        let app = launch()
+        let tabs = [
+            app.buttons["tab.我的设备"],
+            app.buttons["tab.远程协助"],
+            app.buttons["tab.我的"],
+        ]
+        for tab in tabs {
+            XCTAssertTrue(tab.waitForExistence(timeout: 5))
+            XCTAssertTrue(tab.isHittable)
+            XCTAssertGreaterThanOrEqual(tab.frame.width, app.frame.width / 3 - 1)
+            XCTAssertGreaterThanOrEqual(tab.frame.height, 49)
+        }
+    }
+
     @MainActor func testAssistIsStandaloneAndReturnsToOrigin() {
         let app = launch()
         capture("devices-home", app: app)
