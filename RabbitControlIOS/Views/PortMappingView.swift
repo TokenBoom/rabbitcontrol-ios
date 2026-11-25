@@ -61,6 +61,9 @@ struct PortMappingView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("端口映射")
+        .onAppear { AppChrome.shared.tabBarHidden = true }
+        .onDisappear { AppChrome.shared.tabBarHidden = false }
+
         .sheet(isPresented: $showAdd) {
             AddMappingSheet { mapping in
                 mappings.append(mapping)

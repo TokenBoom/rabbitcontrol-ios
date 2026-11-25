@@ -5,6 +5,23 @@ struct DeviceDetailView: View {
     var device: Device
 
     @State private var sessionMode: SessionMode?
+    @State private var tool: Tool?
+
+    enum Tool: String, Identifiable {
+        case fileTransfer = "文件传输"
+        case terminal = "终端"
+        case portMapping = "端口映射"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .fileTransfer: "folder"
+            case .terminal: "terminal"
+            case .portMapping: "network"
+            }
+        }
+    }
 
     enum SessionMode: Identifiable {
         case control
@@ -95,17 +112,11 @@ struct DeviceDetailView: View {
 
                 // 工具入口(O1 工具项的移动端入口)
                 VStack(spacing: 0) {
-                    toolLink(icon: "folder", title: "文件传输") {
-                        FileTransferView(device: device)
-                    }
+                    toolRow(.fileTransfer)
                     divider
-                    toolLink(icon: "terminal", title: "终端") {
-                        TerminalView()
-                    }
+                    toolRow(.terminal)
                     divider
-                    toolLink(icon: "network", title: "端口映射") {
-                        PortMappingView(device: device)
-                    }
+                    toolRow(.portMapping)
                 }
                 .background(.white, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16)
@@ -114,8 +125,21 @@ struct DeviceDetailView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle(device.name)
+        .onAppear { AppChrome.shared.tabBarHidden = true }
+        .onDisappear { AppChrome.shared.tabBarHidden = false }
+
         .fullScreenCover(item: $sessionMode) { mode in
             SessionView(device: device, mode: mode)
+        }
+        .navigationDestination(item: $tool) { tool in
+            switch tool {
+            case .fileTransfer:
+                FileTransferView(device: device)
+            case .terminal:
+                TerminalView()
+            case .portMapping:
+                PortMappingView(device: device)
+            }
         }
     }
 
@@ -125,20 +149,16 @@ struct DeviceDetailView: View {
             .padding(.leading, 56)
     }
 
-    private func toolLink<Destination: View>(
-        icon: String,
-        title: String,
-        @ViewBuilder destination: () -> Destination
-    ) -> some View {
-        NavigationLink {
-            destination()
+    private func toolRow(_ tool: Tool) -> some View {
+        Button {
+            self.tool = tool
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: icon)
+                Image(systemName: tool.icon)
                     .font(.system(size: 17))
                     .foregroundStyle(device.online ? RCColor.accent : RCColor.textDisabled)
                     .frame(width: 24)
-                Text(title)
+                Text(tool.rawValue)
                     .font(.system(size: 14))
                     .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textDisabled)
                 Spacer()
@@ -148,9 +168,10 @@ struct DeviceDetailView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: 48)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!device.online)
-        .accessibilityIdentifier("detail.tool.\(title)")
+        .accessibilityIdentifier("detail.tool.\(tool.rawValue)")
     }
 }

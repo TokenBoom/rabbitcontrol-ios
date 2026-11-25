@@ -27,6 +27,9 @@ struct FileTransferView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("文件传输")
+        .onAppear { AppChrome.shared.tabBarHidden = true }
+        .onDisappear { AppChrome.shared.tabBarHidden = false }
+
     }
 
     // MARK: - 文件浏览器(单栏分段切换)

@@ -27,6 +27,9 @@ struct AllDevicesView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("全部设备")
+        .onAppear { AppChrome.shared.tabBarHidden = true }
+        .onDisappear { AppChrome.shared.tabBarHidden = false }
+
     }
 
     private func group(title: String, devices: [Device]) -> some View {

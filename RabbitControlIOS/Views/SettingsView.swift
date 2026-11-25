@@ -49,6 +49,9 @@ struct SettingsView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("设置")
+        .onAppear { AppChrome.shared.tabBarHidden = true }
+        .onDisappear { AppChrome.shared.tabBarHidden = false }
+
         .navigationBarTitleDisplayMode(.inline)
     }
 

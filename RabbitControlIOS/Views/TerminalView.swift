@@ -44,6 +44,9 @@ struct TerminalView: View {
             .padding(.top, 24)
         }
         .navigationTitle("session1")
+        .onAppear { AppChrome.shared.tabBarHidden = true }
+        .onDisappear { AppChrome.shared.tabBarHidden = false }
+
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
     }

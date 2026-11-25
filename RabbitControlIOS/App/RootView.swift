@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// 全局界面状态:推入二级页面时隐藏悬浮 tab 条,避免遮挡内容。
+@Observable
+final class AppChrome {
+    static let shared = AppChrome()
+    var tabBarHidden = false
+}
+
 /// 应用根视图:三个主 tab(我的设备 / 远程协助 / 我的) + 底部悬浮胶囊 tab 条。
 struct RootView: View {
     enum Tab: Int {
@@ -30,13 +37,17 @@ struct RootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            FloatingTabBar(selection: $selection)
-                .padding(.horizontal, 48)
-                .padding(.bottom, 20)
+            if !AppChrome.shared.tabBarHidden {
+                FloatingTabBar(selection: $selection)
+                    .padding(.horizontal, 48)
+                    .padding(.bottom, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
 
             ToastOverlay(center: ToastCenter.shared)
         }
         .animation(.easeInOut(duration: 0.15), value: ToastCenter.shared.message)
+        .animation(.easeInOut(duration: 0.2), value: AppChrome.shared.tabBarHidden)
     }
 }
 
