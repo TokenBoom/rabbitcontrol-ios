@@ -1,166 +1,160 @@
 import XCTest
 
 final class RabbitControlIOSUITests: XCTestCase {
+    @MainActor private func capture(_ name: String, app: XCUIApplication) {
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = name
+        image.lifetime = .keepAlways
+        add(image)
+    }
 
-    /// 注入 mock 认证,UI 测试不依赖真实服务端。
-    private func makeApp() -> XCUIApplication {
+    @MainActor private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-uiTestingMockAuth"]
+        app.launch()
         return app
     }
-    // XCUITest 的 API 隔离在 MainActor;测试方法需要显式标注,类本身则不能整体隔离
-    @MainActor
-    func testRootViewShowsDeviceList() {
-        let app = makeApp()
-        app.launch()
 
-        let title = app.staticTexts["root.title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10), "根视图未显示「可控设备」标题")
-        XCTAssertTrue(app.buttons["devices.allDevices"].exists, "缺少「全部设备」入口")
-        XCTAssertTrue(app.buttons["device.mac-mini"].waitForExistence(timeout: 5), "缺少在线设备卡片")
-    }
-
-    @MainActor
-    func testDeviceDetailEntersSession() {
-        let app = makeApp()
-        app.launch()
-
-        app.buttons["device.mac-mini"].tap()
-
-        let enter = app.buttons["detail.enterDesktop"]
-        XCTAssertTrue(enter.waitForExistence(timeout: 5), "设备详情缺少「进入桌面」")
-        enter.tap()
-
-        XCTAssertTrue(app.descendants(matching: .any)["session.hud"].waitForExistence(timeout: 5), "会话界面缺少 HUD")
-        XCTAssertTrue(app.buttons["session.controlCenter"].exists, "会话界面缺少「控制中心」")
-    }
-
-    @MainActor
-    func testAssistTabShowsPartnerCard() {
-        let app = makeApp()
-        app.launch()
-
-        app.buttons["tab.远程协助"].tap()
-
-        XCTAssertTrue(app.textFields["assist.partnerID"].waitForExistence(timeout: 5), "缺少伙伴设备 ID 输入框")
-        XCTAssertTrue(app.buttons["assist.connect"].exists, "缺少「开始远控」按钮")
-        XCTAssertTrue(app.staticTexts["assist.localID"].exists, "缺少本设备 ID")
-    }
-
-    @MainActor
-    func testAssistConnectDisabledWithoutInput() {
-        let app = makeApp()
-        app.launch()
-
-        app.buttons["tab.远程协助"].tap()
-
+    @MainActor func testAssistIsStandaloneAndReturnsToOrigin() {
+        let app = launch()
+        capture("devices-home", app: app)
+        app.buttons["devices.assist"].tap()
         let connect = app.buttons["assist.connect"]
         XCTAssertTrue(connect.waitForExistence(timeout: 5))
-        XCTAssertFalse(connect.isEnabled, "未输入设备 ID 时「开始远控」应禁用")
-
+        XCTAssertFalse(connect.isEnabled)
+        capture("assist-page", app: app)
+        let target = app.textFields["assist.partnerID"]
+        target.tap(); target.typeText("123")
+        app.buttons["清除连接目标"].tap()
+        XCTAssertEqual(target.value as? String, "设备 ID 或 IP:端口")
+        XCTAssertFalse(app.buttons["tab.我的设备"].exists)
         let field = app.textFields["assist.partnerID"]
-        field.tap()
-        field.typeText("183435140")
-        XCTAssertTrue(connect.isEnabled, "输入设备 ID 后「开始远控」应可用")
-    }
-
-    @MainActor
-    func testProfileTabShowsAccount() {
-        let app = makeApp()
-        app.launch()
-
-        app.buttons["tab.我的"].tap()
-
-        XCTAssertTrue(app.staticTexts["profile.phone"].waitForExistence(timeout: 5), "缺少账户手机号")
-    }
-
-    @MainActor
-    func testDeviceDetailOpensFileTransfer() {
-        let app = makeApp()
-        app.launch()
-
-        app.buttons["device.mac-mini"].tap()
-        let tool = app.buttons["detail.tool.文件传输"]
-        XCTAssertTrue(tool.waitForExistence(timeout: 5), "设备详情缺少「文件传输」入口")
-        // 工具入口在首屏下方,先滚动露出再点
-        app.swipeUp()
-        tool.tap()
-
-        XCTAssertTrue(app.buttons["transfer.send"].waitForExistence(timeout: 5), "文件传输缺少发送按钮")
-        XCTAssertFalse(app.buttons["transfer.send"].isEnabled, "未勾选文件时发送应禁用")
-    }
-
-    @MainActor
-    func testPortMappingAddValidation() {
-        let app = makeApp()
-        app.launch()
-
-        app.buttons["device.mac-mini"].tap()
-        app.swipeUp()
-        app.buttons["detail.tool.端口映射"].tap()
-        XCTAssertTrue(app.buttons["portmap.add"].waitForExistence(timeout: 5), "端口映射缺少「添加」")
-        app.buttons["portmap.add"].tap()
-
-        let save = app.buttons["portmap.save"]
-        XCTAssertTrue(save.waitForExistence(timeout: 5), "添加弹窗缺少「保存」")
-        save.tap()
-        XCTAssertTrue(app.staticTexts["名称需为 1–64 个字符"].waitForExistence(timeout: 3), "空名称未触发校验错误")
-    }
-
-    /// 遍历主要界面并截图,附件随测试结果导出,供设计走查。
-    @MainActor
-    func testCaptureScreenshots() throws {
-        let app = makeApp()
-        app.launch()
-
-        func shot(_ name: String) {
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = name
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-
-        XCTAssertTrue(app.staticTexts["root.title"].waitForExistence(timeout: 10))
-        shot("01-可控设备")
-
-        app.buttons["tab.远程协助"].tap()
-        XCTAssertTrue(app.textFields["assist.partnerID"].waitForExistence(timeout: 5))
-        shot("02-远程协助")
-
-        app.buttons["tab.我的"].tap()
-        XCTAssertTrue(app.staticTexts["profile.phone"].waitForExistence(timeout: 5))
-        shot("03-我的")
-
-        app.buttons["tab.我的设备"].tap()
-        app.buttons["device.mac-mini"].tap()
-        XCTAssertTrue(app.buttons["detail.enterDesktop"].waitForExistence(timeout: 5))
-        shot("04-设备详情")
-
-        app.swipeUp()
-        app.buttons["detail.tool.文件传输"].tap()
-        XCTAssertTrue(app.buttons["transfer.send"].waitForExistence(timeout: 5))
-        shot("05-文件传输")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-
-        app.buttons["detail.tool.端口映射"].tap()
-        XCTAssertTrue(app.buttons["portmap.add"].waitForExistence(timeout: 5))
-        app.swipeUp()
-        shot("06-端口映射")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-
-        app.buttons["detail.tool.终端"].tap()
-        sleep(1)
-        shot("07-终端")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-
-        app.swipeDown()
-        app.buttons["detail.enterDesktop"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["session.hud"].waitForExistence(timeout: 5))
-        sleep(1)
-        shot("08-远控会话")
-
+        field.tap(); field.typeText("127.0.0.1:9901\n")
+        let exit = app.buttons["session.exit"]
+        XCTAssertTrue(exit.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["tab.我的"].exists)
+        XCTAssertFalse(app.buttons["assist.close"].isHittable)
         app.buttons["session.controlCenter"].tap()
-        sleep(1)
-        shot("09-控制中心")
+        app.buttons["完成"].tap()
+        exit.tap()
+        XCTAssertTrue(connect.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "127.0.0.1:9901")
+        app.buttons["assist.close"].tap()
+        XCTAssertTrue(app.buttons["devices.assist"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testAccountDeviceSearchAndOfflineState() {
+        let app = launch()
+        app.buttons["devices.allDevices"].tap()
+        XCTAssertFalse(app.buttons["tab.我的"].exists)
+        let search = app.searchFields.firstMatch
+        if !search.isHittable { app.swipeDown() }; search.tap(); search.typeText("Gaming")
+        let row = app.buttons["all.device.gaming"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertFalse(app.buttons["detail.enterDesktop"].isEnabled)
+        XCTAssertFalse(app.buttons["detail.watchMode"].isEnabled)
+        capture("offline-detail", app: app)
+        app.buttons["detail.copyID"].tap()
+        XCTAssertTrue(app.staticTexts["已复制设备 ID"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor func testClearUnmatchedSearchRestoresDevices() {
+        let app = launch()
+        app.buttons["devices.allDevices"].tap()
+        let search = app.searchFields.firstMatch
+        if !search.isHittable { app.swipeDown() }
+        search.tap(); search.typeText("no-such-device\n")
+        let clear = app.buttons["清除搜索"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        clear.tap()
+        XCTAssertTrue(app.buttons["all.device.mac-mini"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testGuestLoginShortcutAndServerValidation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-auth.session", "signed-out"]
+        app.launch()
+        app.buttons["tab.我的"].tap()
+        app.buttons["前往登录"].tap()
+        XCTAssertTrue(app.buttons["login.submit"].waitForExistence(timeout: 5))
+        capture("login-page", app: app)
+        app.buttons["服务器设置"].tap()
+        let host = app.textFields["服务器主机名或 IP"]
+        host.tap(); host.typeText("/path")
+        XCTAssertFalse(app.buttons["保存"].isEnabled)
+        XCTAssertFalse(app.buttons["测试连接"].isEnabled)
+        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.buttons["login.submit"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testPasswordFieldsAndCancel() {
+        let app = launch()
+        app.buttons["tab.我的"].tap()
+        capture("profile-page", app: app)
+        app.buttons["profile.修改密码"].tap()
+        XCTAssertEqual(app.secureTextFields.count, 3)
+        XCTAssertFalse(app.buttons["确定"].isEnabled)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.buttons["profile.修改密码"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testEndFromControlHubReturnsToDevice() {
+        let app = launch()
+        app.buttons["device.mac-mini"].tap()
+        app.buttons["detail.enterDesktop"].tap()
+        app.buttons["session.controlCenter"].tap()
+        let end = app.buttons["结束远程协助"]
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        XCTAssertTrue(end.isHittable)
+        end.tap()
+        app.buttons["结束会话"].tap()
+        let button = app.buttons["detail.enterDesktop"]
+        let returned = NSPredicate(format: "isHittable == true")
+        expectation(for: returned, evaluatedWith: button)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["session.exit"].exists)
+    }
+
+    @MainActor func testWatchSessionDoesNotExposeControlTools() {
+        let app = launch()
+        app.buttons["device.mac-mini"].tap()
+        app.buttons["detail.watchMode"].tap()
+        XCTAssertFalse(app.buttons["tab.我的设备"].exists)
+        app.buttons["session.controlCenter"].tap()
+        XCTAssertTrue(app.buttons["完成"].waitForExistence(timeout: 5))
+        capture("watch-controls", app: app)
+        XCTAssertFalse(app.buttons["文件传输"].exists)
+        XCTAssertFalse(app.switches["在桌面上显示鼠标工具"].exists)
+        app.buttons["完成"].tap(); app.buttons["session.exit"].tap()
+        XCTAssertTrue(app.buttons["detail.enterDesktop"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testProfileSettingsAndServerCancel() {
+        let app = launch()
+        app.buttons["tab.我的"].tap(); app.buttons["profile.设置"].tap()
+        XCTAssertTrue(app.switches["settings.showHUD"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["tab.我的设备"].exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["profile.服务器设置"].tap()
+        XCTAssertFalse(app.buttons["保存"].exists)
+        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.buttons["profile.设置"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testLandscapeRegistrationFitsAboveNavigationAfterClosingSettings() {
+        let app = XCUIApplication()
+        // Override the persisted account only in this launch's argument domain.
+        app.launchArguments = ["-auth.session", "signed-out", "-AppleInterfaceStyle", "Dark"]
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.launch()
+        app.buttons["login.switchMode"].tap()
+        app.buttons["服务器设置"].tap()
+        app.buttons["关闭"].tap()
+        let submit = app.buttons["login.submit"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 5))
+        XCTAssertEqual(submit.label, "注册并登录")
+        XCTAssertFalse(submit.isEnabled)
+        XCTAssertLessThanOrEqual(submit.frame.maxY, app.buttons["tab.我的设备"].frame.minY)
     }
 }
