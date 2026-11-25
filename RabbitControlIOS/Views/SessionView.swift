@@ -117,7 +117,7 @@ struct SessionView: View {
                     let result = try await RuntimeService.connect(
                         targetID: digits,
                         watchOnly: watchMode,
-                        lanDirectAddr: resolvedAddr
+                        lanDirectAddr: nil  // 信令路由本身已按 LAN→P2P→中继 三阶优选;传 beacon 地址反而会绕开授权票据路径
                     )
                     await MainActor.run {
                         session.adopt(sessionID: result.sessionID)

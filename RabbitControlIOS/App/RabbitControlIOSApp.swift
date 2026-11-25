@@ -7,6 +7,7 @@ struct RabbitControlIOSApp: App {
         _ = rc_apple_media_init()
         let target = AuthService.shared.serverTarget
         RuntimeService.shared.boot(serverHost: target.host, useHTTPS: target.useHTTPS)
+        RuntimeService.shared.restoreAndStartSignal()
         LANDiscoveryService.shared.start()
     }
 

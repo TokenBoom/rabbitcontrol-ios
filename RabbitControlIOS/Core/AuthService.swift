@@ -87,10 +87,19 @@ final class AuthService {
     /// 登录(同步绑定本机设备)。失败抛出服务器返回的错误文案。
     func login(email: String, password: String) async throws {
         try await authCall(isRegister: false, email: email, password: password)
+        bridgeRuntimeLogin(email: email, password: password)
     }
 
     func register(email: String, password: String) async throws {
         try await authCall(isRegister: true, email: email, password: password)
+        bridgeRuntimeLogin(email: email, password: password)
+    }
+
+    /// 登录成功后把同一凭据喂给 runtime 会话体系(信令/免密连接依赖它)。
+    private func bridgeRuntimeLogin(email: String, password: String) {
+        Task.detached {
+            RuntimeService.shared.login(email: email, password: password)
+        }
     }
 
     private func authCall(
@@ -138,6 +147,7 @@ final class AuthService {
     }
 
     func logout() {
+        RuntimeService.shared.logout()
         session = nil
         devices = []
         UserDefaults.standard.removeObject(forKey: "auth.session")
