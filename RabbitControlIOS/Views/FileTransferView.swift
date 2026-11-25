@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 文件传输(W2 移动端适配):本机/远端双栏改为分段切换单栏,底部传输队列。
 /// 数据逐字取自设计文档 §6.0,接入真数据前为 mock。
@@ -12,6 +13,7 @@ struct FileTransferView: View {
     @State private var tools = ToolService.shared
     @State private var session = SessionService.shared
     @State private var pathStack: [String] = []
+    @State private var showFilePicker = false
 
     private var useReal: Bool { session.sessionID != nil }
     /// 当前远端路径(路径栈顶或根)。
@@ -34,6 +36,25 @@ struct FileTransferView: View {
         }
         .background(RCColor.bgPage)
         .navigationTitle("文件传输")
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.item]) { result in
+            guard let sid = session.sessionID, case let .success(url) = result else { return }
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            // 拷入沙箱暂存:FFI 在选择器作用域结束后仍需可读
+            let staging = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: staging)
+            do {
+                try FileManager.default.copyItem(at: url, to: staging)
+            } catch {
+                ToastCenter.shared.show("文件暂存失败")
+                return
+            }
+            if tools.fileUpload(sessionID: sid, localPath: staging.path, remoteDir: remotePath) != nil {
+                ToastCenter.shared.show("已开始上传到 \(remotePath)")
+            } else {
+                ToastCenter.shared.show("上传发起失败")
+            }
+        }
         .onAppear {
             AppChrome.shared.tabBarHidden = true
             if useReal, let sid = session.sessionID {
@@ -80,6 +101,9 @@ struct FileTransferView: View {
                         }
                         toolbarAction("arrow.clockwise") {
                             tools.fileList(sessionID: sid, path: remotePath)
+                        }
+                        toolbarAction("square.and.arrow.up") {
+                            showFilePicker = true
                         }
                     } else {
                         toolbarIcon("chevron.left")
