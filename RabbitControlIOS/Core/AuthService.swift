@@ -107,6 +107,8 @@ final class AuthService {
         email: String,
         password: String
     ) async throws {
+        // 先探测:TLS 服务端对明文连接会直接断开,probe 内会自动升级 HTTPS 并锚定 CA
+        _ = await probeServer()
         var payload = serverPayload()
         payload["email"] = email
         payload["password"] = password
@@ -263,8 +265,20 @@ final class AuthService {
     }
 
     /// 探测服务器连通性,返回耗时毫秒或错误。
+    /// 明文探测失败时自动升级 HTTPS 重试(TLS 服务端会直接断开明文连接)。
     func probeServer() async -> Result<Int, AuthError> {
-        let raw = await callFFI("probe", serverPayload())
+        var raw = await callFFI("probe", serverPayload())
+        if Self.errorMessage(in: raw) != nil, !serverTarget.useHTTPS {
+            var upgraded = serverTarget
+            upgraded.useHTTPS = true
+            var p: [String: Any] = ["server_host": upgraded.host, "use_https": true]
+            if let ca = upgraded.caCertPem { p["ca_cert_pem"] = ca }
+            let retry = await callFFI("probe", p)
+            if Self.errorMessage(in: retry) == nil {
+                serverTarget.useHTTPS = true
+                raw = retry
+            }
+        }
         if let error = Self.errorMessage(in: raw) { return .failure(.server(error)) }
         guard let raw, let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
