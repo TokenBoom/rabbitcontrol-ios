@@ -44,6 +44,15 @@ char *rc_auth_register(const char *json);
 /// 轮换 Refresh Token:{server..., "refresh_token"}。
 char *rc_auth_refresh(const char *json);
 
+/// 修改密码:{server..., "access_token","current_password","new_password"};返回新令牌。
+char *rc_auth_change_password(const char *json);
+
+/// 设备重命名:{server..., "access_token","device_id","alias"}。
+char *rc_auth_rename_device(const char *json);
+
+/// 设备解绑:{server..., "access_token","device_id"}。
+char *rc_auth_remove_device(const char *json);
+
 /// 账号设备列表:{server..., "access_token"};返回 MyDeviceInfo 数组 JSON。
 char *rc_auth_list_devices(const char *json);
 

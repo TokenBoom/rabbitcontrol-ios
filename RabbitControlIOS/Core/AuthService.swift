@@ -26,6 +26,15 @@ final class AuthService {
         var useHTTPS: Bool
     }
 
+    /// 当前服务器配置;持久化于 UserDefaults,默认本机调试实例。
+    var serverTarget: ServerTarget {
+        didSet {
+            if let data = try? JSONEncoder().encode(serverTarget) {
+                UserDefaults.standard.set(data, forKey: "auth.serverTarget")
+            }
+        }
+    }
+
     private(set) var session: Session?
     private(set) var devices: [AccountDevice] = []
     private(set) var devicesError: String?
@@ -37,6 +46,12 @@ final class AuthService {
     static let uiTestingMock = ProcessInfo.processInfo.arguments.contains("-uiTestingMockAuth")
 
     private init() {
+        if let data = UserDefaults.standard.data(forKey: "auth.serverTarget"),
+           let saved = try? JSONDecoder().decode(ServerTarget.self, from: data) {
+            serverTarget = saved
+        } else {
+            serverTarget = .local
+        }
         if Self.uiTestingMock {
             session = Session(
                 accessToken: "mock", refreshToken: "mock",
@@ -75,7 +90,7 @@ final class AuthService {
         email: String,
         password: String
     ) async throws {
-        let target = ServerTarget.local
+        let target = serverTarget
         let payload: [String: Any] = [
             "server_host": target.host,
             "use_https": target.useHTTPS,
@@ -176,13 +191,103 @@ final class AuthService {
         return String(cString: ptr)
     }
 
+    /// 通用 FFI JSON 调用(后台线程),返回原始响应字符串。
+    private func callFFI(
+        _ function: String,
+        _ payload: [String: Any]
+    ) async -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            Self.withRustString(json.withCString { ptr -> UnsafeMutablePointer<CChar>? in
+                switch function {
+                case "probe": rc_server_probe(ptr)
+                case "change_password": rc_auth_change_password(ptr)
+                case "rename": rc_auth_rename_device(ptr)
+                case "remove": rc_auth_remove_device(ptr)
+                default: nil
+                }
+            })
+        }.value
+    }
+
+    private func serverPayload() -> [String: Any] {
+        ["server_host": serverTarget.host, "use_https": serverTarget.useHTTPS]
+    }
+
+    private static func errorMessage(in raw: String?) -> String? {
+        guard let raw, let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = obj["error"] as? String else { return nil }
+        return error
+    }
+
+    /// 探测服务器连通性,返回耗时毫秒或错误。
+    func probeServer() async -> Result<Int, AuthError> {
+        let raw = await callFFI("probe", serverPayload())
+        if let error = Self.errorMessage(in: raw) { return .failure(.server(error)) }
+        guard let raw, let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let latency = obj["latency_ms"] as? Int else {
+            return .failure(.noResponse)
+        }
+        return .success(latency)
+    }
+
+    /// 修改密码;成功后用新令牌更新会话。
+    func changePassword(current: String, new: String) async throws {
+        guard let session else { throw AuthError.notLoggedIn }
+        var payload = serverPayload()
+        payload["access_token"] = session.accessToken
+        payload["current_password"] = current
+        payload["new_password"] = new
+        let raw = await callFFI("change_password", payload)
+        if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
+        guard let raw, let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let access = obj["access_token"] as? String,
+              let refresh = obj["refresh_token"] as? String else {
+            throw AuthError.badResponse
+        }
+        var updated = session
+        updated.accessToken = access
+        updated.refreshToken = refresh
+        self.session = updated
+        persist()
+    }
+
+    /// 重命名设备别名。
+    func renameDevice(deviceID: String, alias: String) async throws {
+        guard let session else { throw AuthError.notLoggedIn }
+        var payload = serverPayload()
+        payload["access_token"] = session.accessToken
+        payload["device_id"] = deviceID
+        payload["alias"] = alias
+        let raw = await callFFI("rename", payload)
+        if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
+        await refreshDevices()
+    }
+
+    /// 解绑并移除设备。
+    func removeDevice(deviceID: String) async throws {
+        guard let session else { throw AuthError.notLoggedIn }
+        var payload = serverPayload()
+        payload["access_token"] = session.accessToken
+        payload["device_id"] = deviceID
+        let raw = await callFFI("remove", payload)
+        if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
+        await refreshDevices()
+    }
+
     enum AuthError: LocalizedError {
-        case noResponse
+        case notLoggedIn
+    case noResponse
         case badResponse
         case server(String)
 
         var errorDescription: String? {
             switch self {
+            case .notLoggedIn: "未登录"
             case .noResponse: "核心库无响应"
             case .badResponse: "响应格式错误"
             case .server(let message): message
