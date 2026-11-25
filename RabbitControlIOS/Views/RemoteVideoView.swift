@@ -44,13 +44,14 @@ struct RemoteVideoView: View {
     var onTapBackground: (() -> Void)?
 
     /// 触控按下期间持续上报移动(模拟鼠标拖拽)。
+    let zoomPan = ZoomPanState()
     @State private var touchActive = false
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 RCColor.stageBg
-                MetalVideoView()
+                MetalVideoView(zoomPan: zoomPan)
                             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -72,9 +73,11 @@ struct RemoteVideoView: View {
         guard vw > 0, vh > 0, size.width > 0, size.height > 0 else {
             return CGRect(origin: .zero, size: size)
         }
-        let scale = min(size.width / vw, size.height / vh)
+        let scale = min(size.width / vw, size.height / vh) * zoomPan.scale
         let w = vw * scale, h = vh * scale
-        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+        return CGRect(x: (size.width - w) / 2 + zoomPan.panX,
+                      y: (size.height - h) / 2 + zoomPan.panY,
+                      width: w, height: h)
     }
 
     private func dragGesture(in size: CGSize) -> some Gesture {

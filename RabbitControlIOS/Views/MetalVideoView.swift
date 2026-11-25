@@ -6,12 +6,27 @@ import RabbitControlCore
 /// Metal 零拷贝视频渲染:CVPixelBuffer → CVMetalTextureCache 直接映射,
 /// 无 CPU 拷贝。VT 解码输出 NV12 双平面(Y + UV),shader 内做 BT.709 色彩转换。
 /// 帧获取仍走 rc-media-apple 的帧泵(rc_apple_media_frame_take/release)。
+/// 缩放/平移共享状态:SwiftUI 手势层写入,Metal 渲染层与输入映射层读取。
+/// scale=1 为 aspect-fit 刚好适配;pan 为相对居中位置的偏移(单位:点)。
+final class ZoomPanState {
+    nonisolated(unsafe) var scale: CGFloat = 1
+    nonisolated(unsafe) var panX: CGFloat = 0
+    nonisolated(unsafe) var panY: CGFloat = 0
+
+    func reset() {
+        scale = 1
+        panX = 0
+        panY = 0
+    }
+}
+
 final class MetalVideoRenderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var textureCache: CVMetalTextureCache?
     private let pipeline: MTLRenderPipelineState
     private var hasFrame = false
+    var zoomPan: ZoomPanState?
 
     override init() {
         guard let dev = MTLCreateSystemDefaultDevice(),
@@ -135,13 +150,16 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
               let buf = commandQueue.makeCommandBuffer(),
               let enc = buf.makeRenderCommandEncoder(descriptor: pass) else { return }
 
-        // 竖屏等比适配:aspect-fit 视口居中,四周留黑边,不拉伸变形。
+        // 等比适配 + 用户缩放/平移:aspect-fit 基础上乘 zoom,pan 以点为单位换算到像素。
         let dw = view.drawableSize.width, dh = view.drawableSize.height
         if dw > 0, dh > 0, w > 0, h > 0 {
-            let scale = min(dw / CGFloat(w), dh / CGFloat(h))
+            let zp = zoomPan ?? ZoomPanState()
+            let csf = view.contentScaleFactor
+            let scale = min(dw / CGFloat(w), dh / CGFloat(h)) * zp.scale
             let vpW = CGFloat(w) * scale, vpH = CGFloat(h) * scale
             enc.setViewport(MTLViewport(
-                originX: Double((dw - vpW) / 2), originY: Double((dh - vpH) / 2),
+                originX: Double((dw - vpW) / 2 + zp.panX * csf),
+                originY: Double((dh - vpH) / 2 + zp.panY * csf),
                 width: Double(vpW), height: Double(vpH), znear: 0, zfar: 1))
         }
         enc.setRenderPipelineState(pipeline)
@@ -203,6 +221,12 @@ final class MetalVideoRenderer: NSObject, MTKViewDelegate {
 /// SwiftUI 包装。`frameCovered` 比例留给上层做安全区/纵横比适配,本视图铺满即裁剪。
 struct MetalVideoView: UIViewRepresentable {
     let renderer = MetalVideoRenderer()
+    let zoomPan: ZoomPanState
+
+    init(zoomPan: ZoomPanState) {
+        renderer.zoomPan = zoomPan
+        self.zoomPan = zoomPan
+    }
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
@@ -212,8 +236,71 @@ struct MetalVideoView: UIViewRepresentable {
         view.isPaused = false
         view.contentMode = .scaleAspectFit
         view.colorPixelFormat = .bgra8Unorm
+
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.onPinch(_:)))
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.onPan(_:)))
+        pan.minimumNumberOfTouches = 2
+        pan.maximumNumberOfTouches = 2
+        // 双指平移不抢占单指鼠标操控;双指双击复位缩放
+        let reset = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.onReset(_:)))
+        reset.numberOfTouchesRequired = 2
+        reset.numberOfTapsRequired = 2
+        view.addGestureRecognizer(pinch)
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(reset)
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(zoomPan: zoomPan)
+    }
+
+    final class Coordinator: NSObject {
+        let zoomPan: ZoomPanState
+        private var baseScale: CGFloat = 1
+        private var basePan = CGPoint.zero
+
+        init(zoomPan: ZoomPanState) {
+            self.zoomPan = zoomPan
+        }
+
+        @objc func onPinch(_ g: UIPinchGestureRecognizer) {
+            switch g.state {
+            case .began:
+                baseScale = zoomPan.scale
+            case .changed:
+                // 1x 为适配下限,8x 上限;双指捏合的质心移动天然兼顾部分平移
+                zoomPan.scale = min(8, max(1, baseScale * g.scale))
+                if zoomPan.scale == 1 {
+                    zoomPan.panX = 0
+                    zoomPan.panY = 0
+                }
+            default:
+                break
+            }
+        }
+
+        @objc func onPan(_ g: UIPanGestureRecognizer) {
+            switch g.state {
+            case .began:
+                basePan = CGPoint(x: zoomPan.panX, y: zoomPan.panY)
+            case .changed:
+                let t = g.translation(in: g.view)
+                guard zoomPan.scale > 1, let view = g.view else { return }
+                // 平移范围钳制:放大后的画面边缘不越过视图中心太多
+                let maxX = view.bounds.width * zoomPan.scale / 2
+                let maxY = view.bounds.height * zoomPan.scale / 2
+                zoomPan.panX = min(maxX, max(-maxX, basePan.x + t.x))
+                zoomPan.panY = min(maxY, max(-maxY, basePan.y + t.y))
+            default:
+                break
+            }
+        }
+
+        @objc func onReset(_ g: UITapGestureRecognizer) {
+            zoomPan.reset()
+        }
+    }
 }
