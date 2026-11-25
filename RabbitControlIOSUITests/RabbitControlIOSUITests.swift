@@ -70,13 +70,13 @@ final class RabbitControlIOSUITests: XCTestCase {
         XCTAssertTrue(app.buttons["all.device.mac-mini"].waitForExistence(timeout: 5))
     }
 
-    @MainActor func testGuestLoginShortcutAndServerValidation() {
+    @MainActor func testSignedOutRequiresLoginAndServerValidation() {
         let app = XCUIApplication()
         app.launchArguments = ["-auth.session", "signed-out"]
         app.launch()
-        app.buttons["tab.我的"].tap()
-        app.buttons["前往登录"].tap()
         XCTAssertTrue(app.buttons["login.submit"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["tab.我的"].exists)
+        XCTAssertFalse(app.buttons["devices.assist"].exists)
         capture("login-page", app: app)
         app.buttons["服务器设置"].tap()
         let host = app.textFields["服务器主机名或 IP"]
@@ -155,6 +155,6 @@ final class RabbitControlIOSUITests: XCTestCase {
         XCTAssertTrue(submit.waitForExistence(timeout: 5))
         XCTAssertEqual(submit.label, "注册并登录")
         XCTAssertFalse(submit.isEnabled)
-        XCTAssertLessThanOrEqual(submit.frame.maxY, app.buttons["tab.我的设备"].frame.minY)
+        XCTAssertLessThanOrEqual(submit.frame.maxY, app.windows.firstMatch.frame.maxY)
     }
 }

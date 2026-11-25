@@ -2,7 +2,6 @@ import SwiftUI
 
 /// 登录 / 注册页:邮箱 + 密码,对接本地/远程 rabbitcontrol-server。
 struct LoginView: View {
-    var openAssist: () -> Void
     @State private var email = ""
     @State private var password = ""
     @State private var isRegisterMode = false
@@ -35,6 +34,12 @@ struct LoginView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showServer) { ServerConfigSheet() }
+        .onAppear {
+            if email.isEmpty, let remembered = auth.rememberedEmail { email = remembered }
+        }
+        .onChange(of: showServer) {
+            if !showServer, let remembered = auth.rememberedEmail { email = remembered }
+        }
         .background(RCColor.bgPage)
     }
 
@@ -51,9 +56,6 @@ struct LoginView: View {
             Text("RabbitControl")
                 .font(.title.bold())
                 .foregroundStyle(RCColor.textPrimary)
-            Button("免登录直连", action: openAssist)
-                .disabled(isWorking)
-                .buttonStyle(.bordered).accessibilityIdentifier("devices.assist")
             Text(isRegisterMode ? "创建账号，在多台设备间使用远程协助" : "登录以查看和控制账号下的设备")
                 .font(.subheadline)
                 .foregroundStyle(RCColor.textSecondary)
@@ -145,5 +147,5 @@ struct LoginView: View {
 }
 
 #Preview {
-    LoginView(openAssist: {})
+    LoginView()
 }

@@ -4,14 +4,26 @@ struct RootView: View {
     enum Tab { case devices, profile }
     @State private var selection: Tab = .devices
     @State private var showAssist = false
+    private var auth: AuthService { .shared }
 
     var body: some View {
+        Group {
+            if auth.isLoggedIn { home } else { LoginView() }
+        }
+        .overlay { ToastOverlay(center: .shared).allowsHitTesting(false).animation(.easeInOut(duration: 0.2), value: ToastCenter.shared.message) }
+        .onChange(of: auth.isLoggedIn) {
+            if !auth.isLoggedIn { showAssist = false; selection = .devices }
+        }
+    }
+
+    /// 登录后的主页;未登录时与 Android 一致,只显示登录/注册。
+    private var home: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 Group {
                     switch selection {
                     case .devices: DeviceListView { showAssist = true }
-                    case .profile: ProfileView { selection = .devices }
+                    case .profile: ProfileView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -29,7 +41,6 @@ struct RootView: View {
             }
             .background(RCColor.bgPage.ignoresSafeArea())
         }
-        .overlay { ToastOverlay(center: .shared).allowsHitTesting(false).animation(.easeInOut(duration: 0.2), value: ToastCenter.shared.message) }
         .accessibilityHidden(showAssist)
         .fullScreenCover(isPresented: $showAssist) { NavigationStack { AssistView() } }
     }

@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct ProfileView: View {
-    let openLogin: () -> Void
     @State private var showChangePassword = false
     @State private var showServerConfig = false
     @State private var showLogoutConfirm = false
@@ -18,7 +17,6 @@ struct ProfileView: View {
                             .accessibilityIdentifier("profile.phone")
                     }
                 }.padding(.vertical, 6)
-                if !auth.isLoggedIn { Button("前往登录", action: openLogin) }
             }
             Section("偏好与连接") {
                 NavigationLink { SettingsView() } label: { Label("设置", rabbitIcon: .settings) }
@@ -42,7 +40,7 @@ struct ProfileView: View {
         .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
         .sheet(isPresented: $showServerConfig) { ServerConfigSheet() }
         .confirmationDialog("退出当前账号？", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) { auth.logout(); openLogin() }
+            Button("退出登录", role: .destructive) { auth.logout() }
             Button("取消", role: .cancel) {}
         } message: { Text("将断开当前会话并清除本机账号信息，不会解绑设备。") }
     }

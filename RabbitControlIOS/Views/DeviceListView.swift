@@ -26,13 +26,7 @@ struct DeviceListView: View {
     private var offlineDevices: [Device] { devices.filter { !$0.online } }
 
     var body: some View {
-        Group {
-            if auth.isLoggedIn {
-                deviceList
-            } else {
-                LoginView(openAssist: openAssist)
-            }
-        }
+        deviceList
         .background(RCColor.bgPage)
         .navigationBarHidden(true)
         .task(id: auth.isLoggedIn) {
