@@ -6,6 +6,10 @@ struct DeviceDetailView: View {
 
     @State private var sessionMode: SessionMode?
     @State private var tool: Tool?
+    @State private var showRename = false
+    @State private var showRemoveConfirm = false
+    @State private var renameText = ""
+    @Environment(\.dismiss) private var dismiss
 
     enum Tool: String, Identifiable {
         case fileTransfer = "文件传输"
@@ -124,6 +128,46 @@ struct DeviceDetailView: View {
             .padding(.top, 8)
         }
         .background(RCColor.bgPage)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        renameText = device.name
+                        showRename = true
+                    } label: {
+                        Label("重命名", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        showRemoveConfirm = true
+                    } label: {
+                        Label("解绑设备", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("device.menu")
+            }
+        }
+        .alert("重命名设备", isPresented: $showRename) {
+            TextField("设备别名", text: $renameText)
+            Button("取消", role: .cancel) {}
+            Button("确定") {
+                Task {
+                    try? await AuthService.shared.renameDevice(deviceID: device.id, alias: renameText)
+                }
+            }
+        }
+        .alert("解绑该设备?", isPresented: $showRemoveConfirm) {
+            Button("取消", role: .cancel) {}
+            Button("解绑", role: .destructive) {
+                Task {
+                    try? await AuthService.shared.removeDevice(deviceID: device.id)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("解绑后该设备将从你的账号中移除")
+        }
         .navigationTitle(device.name)
         .onAppear { AppChrome.shared.tabBarHidden = true }
         .onDisappear { AppChrome.shared.tabBarHidden = false }
