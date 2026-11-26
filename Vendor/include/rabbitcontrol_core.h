@@ -4,6 +4,7 @@
 #ifndef RABBITCONTROL_CORE_H
 #define RABBITCONTROL_CORE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -90,19 +91,25 @@ char *rc_apple_clipboard_take(void);
 /// 帧链路诊断计数 JSON:{"presented_cvpb","presented_cpu","taken"}。用毕 rc_string_free。
 char *rc_apple_media_stats(void);
 
+/// 零分配帧取放结构体(与 Rust 侧 `RcAppleFrame` ABI 一致)。
+typedef struct RcAppleFrame {
+    uint64_t ptr;
+    uint32_t width;
+    uint32_t height;
+    uint64_t seq;
+} RcAppleFrame;
+
+/// 零分配快速取走最新帧(所有权转移):无帧返回 false(零锁零堆分配),有帧写入 *out 返回 true。
+/// out->ptr 即 CVPixelBufferRef;用毕必须调 rc_apple_media_frame_release(out->ptr)。
+bool rc_apple_media_frame_take_raw(RcAppleFrame *out);
+
 /// 取走最新帧(所有权转移):{"ptr": u64, "width", "height", "seq"},无帧返回 {}。
 /// ptr 即 CVPixelBufferRef;用毕必须调 rc_apple_media_frame_release。
 /// 返回字符串用毕调 rc_string_free 释放(同一分配器)。
 char *rc_apple_media_frame_take(void);
 
-/// 释放帧(仅限 rc_apple_media_frame_take 取走的 ptr,每帧一次)。
-void rc_apple_media_frame_release(unsigned long long ptr);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif // RABBITCONTROL_CORE_H
+/// 释放帧(仅限 rc_apple_media_frame_take / rc_apple_media_frame_take_raw 取走的 ptr,每帧一次)。
+void rc_apple_media_frame_release(uint64_t ptr);
 
 // ── 运行时(有状态:认证会话+信令+一键连接)──
 char *rc_runtime_init(const char *json);
@@ -118,3 +125,9 @@ char *rc_runtime_connect(const char *json);
 // ── 工具通道(文件/终端/端口映射)──
 char *rc_tools_call(uint64_t session_id, const char *json);
 char *rc_tools_poll(uint64_t session_id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // RABBITCONTROL_CORE_H
