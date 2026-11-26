@@ -27,7 +27,7 @@ struct DeviceDetailView: View {
     @State private var quickTool: QuickTool?
     @State private var standaloneTool: QuickTool?
     @State private var showMoreTools = false
-    @State private var powerConfirmKind: String?
+    @State private var powerConfirmKind: DevicePowerAction?
     @State private var showRename = false
     @State private var showRemoveConfirm = false
     @State private var renameText = ""
@@ -86,6 +86,26 @@ struct DeviceDetailView: View {
         if !account.online { return "设备离线。请在对方设备上打开 RabbitControl 并检查网络，下拉可刷新状态。" }
         if !account.allowRemoteAssist { return "请先在对方设备上允许远程协助。" }
         return "控制模式支持键鼠与远程工具；仅查看不会发送操作。"
+    }
+
+    private func openMoreTool(_ action: DeviceMoreToolAction) {
+        showMoreTools = false
+        switch action {
+        case .files:
+            standaloneTool = .files
+        case .watch:
+            sessionMode = .watch
+        case .terminal:
+            standaloneTool = .terminal
+        case .portMapping:
+            standaloneTool = .portMapping
+        }
+    }
+
+    private func confirmPowerAction(_ action: DevicePowerAction) {
+        powerConfirmKind = nil
+        showMoreTools = false
+        ToastCenter.shared.show("等待被控端支持远程电源协议（可使用「终端」执行 \(action.command)）")
     }
 
     var body: some View {
@@ -219,32 +239,39 @@ struct DeviceDetailView: View {
         .navigationTitle(account?.displayName ?? device.name)
 
         .disabled(saving)
-        .overlay { if saving { ProgressView("正在保存…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .accessibilityHidden(showMoreTools || powerConfirmKind != nil)
+        .allowsHitTesting(!(showMoreTools || powerConfirmKind != nil))
+        .overlay {
+            ZStack {
+                if saving {
+                    ProgressView("正在保存…")
+                        .padding()
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                if showMoreTools {
+                    MoreToolsMenuView(
+                        onTool: openMoreTool,
+                        onPower: { powerConfirmKind = $0 },
+                        onReorder: { ToastCenter.shared.show("功能开发中") },
+                        onClose: { showMoreTools = false },
+                        isCovered: powerConfirmKind != nil
+                    )
+                }
+                if let powerConfirmKind {
+                    DevicePowerConfirmView(
+                        action: powerConfirmKind,
+                        deviceName: account?.displayName ?? device.name,
+                        onCancel: { self.powerConfirmKind = nil },
+                        onConfirm: { confirmPowerAction(powerConfirmKind) }
+                    )
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: showMoreTools)
+            .animation(.easeOut(duration: 0.15), value: powerConfirmKind)
+        }
         .alert("操作未完成", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("好") { actionError = nil }
         } message: { Text(actionError ?? "") }
-        .confirmationDialog("更多功能", isPresented: $showMoreTools, titleVisibility: .visible) {
-            Button("端口映射") { standaloneTool = .portMapping }
-            Button("重启设备", role: .destructive) { powerConfirmKind = "reboot" }
-            Button("关闭电源", role: .destructive) { powerConfirmKind = "shutdown" }
-            Button("取消", role: .cancel) {}
-        }
-        .confirmationDialog(
-            powerConfirmKind == "reboot" ? "重启设备" : "关闭电源",
-            isPresented: Binding(get: { powerConfirmKind != nil }, set: { if !$0 { powerConfirmKind = nil } }),
-            titleVisibility: .visible
-        ) {
-            let isReboot = powerConfirmKind == "reboot"
-            Button(isReboot ? "确认重启" : "确认关机", role: .destructive) {
-                let cmd = isReboot ? "reboot" : "shutdown"
-                powerConfirmKind = nil
-                ToastCenter.shared.show("等待被控端支持远程电源协议（可使用「终端」执行 \(cmd)）")
-            }
-            Button("取消", role: .cancel) { powerConfirmKind = nil }
-        } message: {
-            let verb = powerConfirmKind == "reboot" ? "重启" : "关机"
-            Text("确认要\(verb)「\(account?.displayName ?? device.name)」吗？")
-        }
         .accessibilityHidden(sessionMode != nil || standaloneTool != nil)
         .fullScreenCover(item: $sessionMode, onDismiss: { quickTool = nil; SessionService.shared.close() }) { mode in
             SessionView(device: device, mode: mode, initialTool: mode == .control ? quickTool : nil)

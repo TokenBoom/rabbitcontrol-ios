@@ -59,8 +59,11 @@ final class RabbitControlIOSUITests: XCTestCase {
     @MainActor func testAccountDeviceSearchAndOfflineState() {
         let app = launch()
         app.buttons["devices.allDevices"].tap()
-        XCTAssertFalse(app.buttons["tab.我的"].exists)
         let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        let tabGone = NSPredicate(format: "exists == false")
+        expectation(for: tabGone, evaluatedWith: app.buttons["tab.我的"])
+        waitForExpectations(timeout: 3)
         if !search.isHittable { app.swipeDown() }; search.tap(); search.typeText("Gaming")
         let row = app.buttons["all.device.gaming"]
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
@@ -174,5 +177,32 @@ final class RabbitControlIOSUITests: XCTestCase {
         XCTAssertEqual(submit.label, "注册并登录")
         XCTAssertFalse(submit.isEnabled)
         XCTAssertLessThanOrEqual(submit.frame.maxY, app.windows.firstMatch.frame.maxY)
+    }
+
+    @MainActor func testMoreToolsMenuUsesDesignedModalAndPowerConfirm() {
+        let app = launch()
+        app.buttons["device.mac-mini"].tap()
+        app.buttons["detail.more"].tap()
+
+        XCTAssertTrue(app.staticTexts["更多工具"].waitForExistence(timeout: 5))
+        for id in ["moreTools.files", "moreTools.watch", "moreTools.terminal", "moreTools.portMapping", "moreTools.reboot", "moreTools.shutdown"] {
+            XCTAssertTrue(app.buttons[id].exists, id)
+        }
+        XCTAssertTrue(app.buttons["moreTools.reorder"].exists)
+        XCTAssertTrue(app.buttons["moreTools.close"].exists)
+        capture("more-tools-menu", app: app)
+
+        app.buttons["moreTools.reboot"].tap()
+        XCTAssertTrue(app.staticTexts["重启设备"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["powerConfirm.cancel"].exists)
+        XCTAssertTrue(app.buttons["powerConfirm.confirm"].exists)
+        capture("more-tools-power-confirm", app: app)
+        app.buttons["powerConfirm.cancel"].tap()
+        XCTAssertTrue(app.buttons["moreTools.files"].waitForExistence(timeout: 3))
+
+        app.buttons["moreTools.close"].tap()
+        let menuGone = NSPredicate(format: "exists == false")
+        expectation(for: menuGone, evaluatedWith: app.staticTexts["更多工具"])
+        waitForExpectations(timeout: 3)
     }
 }

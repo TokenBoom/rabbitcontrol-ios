@@ -49,6 +49,8 @@ struct RabbitIcon: View {
         case star = "icon-star"
         case starFilled = "icon-star-filled"
         case checkmark = "icon-checkmark"
+        case restart = "icon-restart"
+        case power = "icon-power"
     }
 
     let name: Name

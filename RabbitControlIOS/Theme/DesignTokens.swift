@@ -14,6 +14,11 @@ enum RCColor {
     static let bgHover = adaptive(0xE8E8EA, 0x35363A)
     static let bgCard = Color(hex: 0xF8F9FA)
     static let bgPage = adaptive(0xEEF1F6, 0x18191C)
+    static let bgToolTile = adaptive(0xF2F6FF, 0x1B2A44)
+    static let bgToolTilePressed = adaptive(0xE6EEFF, 0x263856)
+    static let toolTileStroke = Color(hex: 0x3370FF, opacity: 0.12)
+    static let popoverStroke = Color.primary.opacity(0.09)
+    static let modalMask = Color.black.opacity(0.30)
     static let accent = Color(hex: 0x3370FF)
     static let accentPressed = Color(hex: 0x2A5FD9)
     static let textPrimary = Color.primary
