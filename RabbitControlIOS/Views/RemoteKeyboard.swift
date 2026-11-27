@@ -2,9 +2,49 @@ import SwiftUI
 
 struct RemoteKeyboard: View {
     var session: SessionService
+    var deviceKind: Device.Kind? = nil
     @State private var text = ""
     @State private var modifier: UInt16 = 0
     @State private var feedback: String?
+
+    private struct SystemShortcut: Identifiable {
+        let title: String
+        let key: UInt16
+        let modifiers: [UInt16]
+        var id: String { title }
+    }
+
+    private var prefersPC: Bool {
+        session.prefersPCShortcuts(deviceKind: deviceKind)
+    }
+
+    private var systemShortcuts: [SystemShortcut] {
+        if prefersPC {
+            return [
+                SystemShortcut(title: "复制 Ctrl+C", key: 0x2e, modifiers: [0x1d]),
+                SystemShortcut(title: "粘贴 Ctrl+V", key: 0x2f, modifiers: [0x1d]),
+                SystemShortcut(title: "撤销 Ctrl+Z", key: 0x2c, modifiers: [0x1d]),
+                SystemShortcut(title: "全选 Ctrl+A", key: 0x1e, modifiers: [0x1d]),
+                SystemShortcut(title: "切换窗口 Alt+Tab", key: 0x0f, modifiers: [0x38]),
+                SystemShortcut(title: "显示桌面 Win+D", key: 0x20, modifiers: [0xe05b]),
+                SystemShortcut(title: "任务管理器 ⌃⇧Esc", key: 0x01, modifiers: [0x1d, 0x2a]),
+                SystemShortcut(title: "关闭窗口 Alt+F4", key: 0x3e, modifiers: [0x38]),
+                SystemShortcut(title: "锁定屏幕 Win+L", key: 0x26, modifiers: [0xe05b]),
+            ]
+        }
+        return [
+            SystemShortcut(title: "拷贝 ⌘C", key: 0x2e, modifiers: [0xe05b]),
+            SystemShortcut(title: "粘贴 ⌘V", key: 0x2f, modifiers: [0xe05b]),
+            SystemShortcut(title: "撤销 ⌘Z", key: 0x2c, modifiers: [0xe05b]),
+            SystemShortcut(title: "全选 ⌘A", key: 0x1e, modifiers: [0xe05b]),
+            SystemShortcut(title: "切换应用 ⌘Tab", key: 0x0f, modifiers: [0xe05b]),
+            SystemShortcut(title: "聚焦搜索 ⌘Space", key: 0x39, modifiers: [0xe05b]),
+            SystemShortcut(title: "强制退出 ⌥⌘Esc", key: 0x01, modifiers: [0x38, 0xe05b]),
+            SystemShortcut(title: "全屏截屏 ⇧⌘3", key: 0x04, modifiers: [0x2a, 0xe05b]),
+            SystemShortcut(title: "锁定屏幕 ⌃⌘Q", key: 0x10, modifiers: [0x1d, 0xe05b]),
+        ]
+    }
+
     private var strokes: [RemoteKeys.Stroke]? {
         guard text.count <= 80 else { return nil }
         return RemoteKeys.strokes(for: text)
@@ -14,7 +54,14 @@ struct RemoteKeyboard: View {
         Form {
             Section("发送按键") {
                 Picker("组合键", selection: $modifier) {
-                    ForEach([("无", UInt16(0)), ("⌘", 0xe05b), ("⌃", 0x1d), ("⌥", 0x38), ("⇧", 0x2a)], id: \.1) {
+                    let modOptions: [(String, UInt16)] = [
+                        ("无", 0),
+                        (prefersPC ? "Win" : "⌘", 0xe05b),
+                        ("⌃", 0x1d),
+                        (prefersPC ? "Alt" : "⌥", 0x38),
+                        ("⇧", 0x2a),
+                    ]
+                    ForEach(modOptions, id: \.1) {
                         Text($0.0).tag($0.1)
                     }
                 }.pickerStyle(.segmented)
@@ -27,28 +74,28 @@ struct RemoteKeyboard: View {
                 else if let feedback, text.isEmpty { Text(feedback).font(.footnote).foregroundStyle(.secondary) }
             }
             Section {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96))]) {
-                    ForEach([("拷贝 ⌘C", UInt16(0x2e)), ("粘贴 ⌘V", 0x2f), ("撤销 ⌘Z", 0x2c), ("全选 ⌘A", 0x1e),
-                             ("切换 App ⌘Tab", 0x0f), ("聚焦搜索 ⌘空格", 0x39)], id: \.1) { shortcut in
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 102))]) {
+                    ForEach(systemShortcuts) { shortcut in
                         Button {
-                            session.tapKey(shortcut.1, modifiers: [0xe05b])
-                            feedback = "已发送「\(shortcut.0)」。"
+                            session.tapKey(shortcut.key, modifiers: shortcut.modifiers)
+                            feedback = "已发送「\(shortcut.title)」。"
                         } label: {
-                            Text(shortcut.0).font(.subheadline).lineLimit(1).minimumScaleFactor(0.8)
+                            Text(shortcut.title).font(.subheadline).lineLimit(1).minimumScaleFactor(0.8)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.bordered)
                     }
                 }
-            } header: { Text("常用快捷键") } footer: { Text("按 Mac 快捷键发送，不使用上方选择的组合键。") }
+            } header: { Text("常用系统组合键") } footer: { Text("自动适配被控端系统常用组合键，点击直接发送至被控端。") }
             Section("功能键") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 65))]) {
                     ForEach([("Esc", UInt16(1)), ("Tab", 0x0f), ("退格", 0x0e), ("回车", 0x1c),
-                             ("←", 0xe04b), ("↑", 0xe048), ("↓", 0xe050), ("→", 0xe04d)], id: \.1) { key in
+                             ("←", 0xe04b), ("↑", 0xe048), ("↓", 0xe050), ("→", 0xe04d),
+                             ("Home", 0xe047), ("End", 0xe04f), ("PgUp", 0xe049), ("PgDn", 0xe051)], id: \.1) { key in
                         Button { session.tapKey(key.1, modifiers: modifiers(shift: false)) } label: {
                             Text(key.0).frame(maxWidth: .infinity, minHeight: 44)
                         }
-                            .buttonStyle(.bordered)
+                        .buttonStyle(.bordered)
                     }
                 }
             }

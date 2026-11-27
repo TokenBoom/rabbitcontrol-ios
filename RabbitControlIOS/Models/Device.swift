@@ -33,6 +33,11 @@ struct Device: Identifiable, Hashable {
     let online: Bool
     let isLocal: Bool
     let wallpaper: Wallpaper
+    var allowRemoteControl: Bool = true
+    var allowRemoteAssist: Bool = true
+    var inSession: Bool = false
+    var isSelfDevice: Bool = false
+    var appVersion: String = ""
 }
 
 extension Device.Kind {
@@ -66,9 +71,22 @@ extension Device.Wallpaper {
 }
 
 extension AccountDevice {
-    func card(nearbyIDs: Set<String>) -> Device {
-        Device(id: deviceID, name: displayName, kind: Device.Kind(osString: os), online: online,
-               isLocal: nearbyIDs.contains(deviceID.replacingOccurrences(of: " ", with: "")) || nearbyIDs.contains(formattedID.replacingOccurrences(of: " ", with: "")),
-               wallpaper: Device.Wallpaper(hashSeed: deviceID))
+    func card(nearbyIDs: Set<String>, ownDeviceID: String? = nil) -> Device {
+        let compactSelf = deviceID.replacingOccurrences(of: " ", with: "")
+        let compactOwn = ownDeviceID?.replacingOccurrences(of: " ", with: "")
+        let selfFlag = os.lowercased() == "ios" || (compactOwn != nil && !compactOwn!.isEmpty && compactSelf == compactOwn)
+        return Device(
+            id: deviceID,
+            name: displayName,
+            kind: Device.Kind(osString: os),
+            online: online,
+            isLocal: nearbyIDs.contains(compactSelf) || nearbyIDs.contains(formattedID.replacingOccurrences(of: " ", with: "")),
+            wallpaper: Device.Wallpaper(hashSeed: deviceID),
+            allowRemoteControl: allowRemoteControl && !selfFlag,
+            allowRemoteAssist: allowRemoteAssist,
+            inSession: effectiveInSession,
+            isSelfDevice: selfFlag,
+            appVersion: appVersion
+        )
     }
 }

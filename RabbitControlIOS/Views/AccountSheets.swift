@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 修改密码弹层。
+/// 修改密码弹层（`embeddedInSplit` 为 true 时作为 iPad 设置右栏内嵌表单渲染）。
 struct ChangePasswordSheet: View {
+    var embeddedInSplit = false
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focus: Field?
     private enum Field { case current, new, confirm }
@@ -9,13 +10,32 @@ struct ChangePasswordSheet: View {
     @State private var new = ""
     @State private var confirm = ""
     @State private var isWorking = false
-    @State private var errorMessage: String?
+    @State private var uiError: RCUiError?
 
     private var auth: AuthService { .shared }
 
     var body: some View {
-        NavigationStack {
-            Form {
+        if embeddedInSplit {
+            formBody
+        } else {
+            NavigationStack {
+                formBody
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { dismiss() }.disabled(isWorking)
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(isWorking ? "提交中…" : "确定") { submit() }
+                                .disabled(!canSubmit)
+                        }
+                    }
+            }
+        }
+    }
+
+    private var formBody: some View {
+        Form {
+            Section("验证与设置新密码") {
                 SecureField("当前密码", text: $current)
                     .textContentType(.password).focused($focus, equals: .current)
                     .submitLabel(.next).onSubmit { focus = .new }
@@ -26,26 +46,37 @@ struct ChangePasswordSheet: View {
                     .textContentType(.newPassword).focused($focus, equals: .confirm)
                     .submitLabel(.done).onSubmit(submit)
                 if !confirm.isEmpty && new != confirm { Text("两次输入的新密码不一致").foregroundStyle(.red) }
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.system(size: 12))
-                        .foregroundStyle(RCColor.danger)
+            }
+            if let uiError {
+                Section {
+                    RCInlineErrorView(error: uiError, onDismiss: {
+                        self.uiError = nil
+                    })
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
             }
-            .navigationTitle("修改密码")
-            .disabled(isWorking).interactiveDismissDisabled(isWorking)
-            .scrollDismissesKeyboard(.interactively)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }.disabled(isWorking)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(isWorking ? "提交中…" : "确定") { submit() }
-                        .disabled(!canSubmit)
+            if embeddedInSplit {
+                Section {
+                    Button {
+                        submit()
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if isWorking { ProgressView().padding(.trailing, 6) }
+                            Text(isWorking ? "提交中…" : "保存新密码")
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
+                    }
+                    .disabled(!canSubmit)
                 }
             }
         }
+        .navigationTitle("修改密码")
+        .disabled(isWorking).interactiveDismissDisabled(isWorking)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var canSubmit: Bool {
@@ -56,13 +87,21 @@ struct ChangePasswordSheet: View {
         guard canSubmit else { return }
         focus = nil
         isWorking = true
-        errorMessage = nil
+        uiError = nil
         Task {
             do {
                 try await auth.changePassword(current: current, new: new)
-                dismiss()
+                if embeddedInSplit {
+                    current = ""
+                    new = ""
+                    confirm = ""
+                    ToastCenter.shared.show("密码已更新")
+                } else {
+                    dismiss()
+                }
             } catch {
-                errorMessage = error.localizedDescription
+                uiError = (error as? AuthService.AuthError)?.uiError
+                    ?? RCUiErrorCodec.fromError(error)
             }
             isWorking = false
         }
@@ -71,6 +110,7 @@ struct ChangePasswordSheet: View {
 
 /// 多服务器管理弹层:支持查看当前服务器、添加/编辑/删除多台服务器、连通性测试及一键切换。
 struct ServerConfigSheet: View {
+    var embeddedInSplit = false
     @Environment(\.dismiss) private var dismiss
     @State private var editingServer: EditingItem?
     @State private var pendingSwitch: AuthService.SavedServer?
@@ -93,49 +133,69 @@ struct ServerConfigSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                currentServerSection
-                serverListSection
-            }
-            .navigationTitle("服务器管理")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        editingServer = EditingItem(existing: nil)
-                    } label: {
-                        HStack(spacing: 4) {
-                            RabbitIcon(.plus, size: 16)
-                            Text("添加")
+        if embeddedInSplit {
+            serverListContent
+        } else {
+            NavigationStack {
+                serverListContent
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("关闭") { dismiss() }
                         }
                     }
-                    .accessibilityIdentifier("server.add")
+            }
+        }
+    }
+
+    private var serverListContent: some View {
+        List {
+            currentServerSection
+            serverListSection
+            Section {
+                NavigationLink {
+                    ProxySettingsView()
+                } label: {
+                    LabeledContent("出站网络代理", value: ProxyConfigStore.shared.config.summaryText)
                 }
+                .accessibilityIdentifier("server.proxySettings")
+            } header: {
+                Text("网络环境")
             }
-            .sheet(item: $editingServer) { item in
-                ServerEditorSheet(existing: item.existing)
-            }
-            .confirmationDialog(
-                "切换服务器？",
-                isPresented: Binding(get: { pendingSwitch != nil }, set: { if !$0 { pendingSwitch = nil } }),
-                titleVisibility: .visible
-            ) {
-                if let target = pendingSwitch {
-                    Button("退出并切换到 \(target.displayName)", role: .destructive) {
-                        auth.switchToServer(target)
-                        pendingSwitch = nil
-                        ToastCenter.shared.show("已切换至 \(target.displayName)")
-                        dismiss()
+        }
+        .navigationTitle("服务器管理")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    editingServer = EditingItem(existing: nil)
+                } label: {
+                    HStack(spacing: 4) {
+                        RabbitIcon(.plus, size: 16)
+                        Text("添加")
                     }
                 }
-                Button("取消", role: .cancel) { pendingSwitch = nil }
-            } message: {
-                Text("切换到其他服务器将退出当前账号，需要重新登录。")
+                .accessibilityIdentifier("server.add")
             }
+        }
+        .sheet(item: $editingServer) { item in
+            ServerEditorSheet(existing: item.existing)
+        }
+        .confirmationDialog(
+            "切换服务器？",
+            isPresented: Binding(get: { pendingSwitch != nil }, set: { if !$0 { pendingSwitch = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let target = pendingSwitch {
+                Button("退出并切换到 \(target.displayName)", role: .destructive) {
+                    auth.switchToServer(target)
+                    pendingSwitch = nil
+                    ToastCenter.shared.show("已切换至 \(target.displayName)")
+                    if !embeddedInSplit { dismiss() }
+                }
+            }
+            Button("取消", role: .cancel) { pendingSwitch = nil }
+        } message: {
+            Text("切换到其他服务器将退出当前账号，需要重新登录。")
         }
     }
 
@@ -318,6 +378,8 @@ private struct ServerEditorSheet: View {
     @State private var name: String
     @State private var draft: AuthService.ServerTarget
     @State private var port: String
+    @State private var signalPort: String
+    @State private var relayPort: String
     @State private var switchImmediately: Bool
     @State private var probeStatus: String?
     @State private var isProbing = false
@@ -326,10 +388,16 @@ private struct ServerEditorSheet: View {
     init(existing: AuthService.SavedServer?) {
         self.existing = existing
         var target = existing?.target ?? AuthService.ServerTarget(host: "", useHTTPS: true)
-        if existing == nil { target.apiPort = 21118 }
+        if existing == nil {
+            target.apiPort = 21118
+            target.signalPort = 21116
+            target.relayPort = 21117
+        }
         _name = State(initialValue: existing?.name ?? "")
         _draft = State(initialValue: target)
         _port = State(initialValue: String(target.effectiveAPIPort))
+        _signalPort = State(initialValue: String(target.effectiveSignalPort))
+        _relayPort = State(initialValue: String(target.effectiveRelayPort))
         _switchImmediately = State(initialValue: existing == nil && !AuthService.shared.isLoggedIn)
     }
 
@@ -339,7 +407,10 @@ private struct ServerEditorSheet: View {
         if host.contains(where: { $0.isWhitespace || "/?#@".contains($0) }) {
             return "只填主机名或 IP，不含协议或路径。"
         }
-        return (UInt16(port) ?? 0) > 0 ? nil : "API 端口必须是 1–65535 的整数。"
+        guard (UInt16(port) ?? 0) > 0 else { return "API 端口必须是 1–65535 的整数。" }
+        guard (UInt16(signalPort) ?? 0) > 0 else { return "信令端口必须是 1–65535 的整数。" }
+        guard (UInt16(relayPort) ?? 0) > 0 else { return "中继端口必须是 1–65535 的整数。" }
+        return nil
     }
     private var valid: Bool { validation == nil }
 
@@ -353,10 +424,42 @@ private struct ServerEditorSheet: View {
                     LabeledContent("API 端口") {
                         TextField("21118", text: $port).keyboardType(.numberPad).multilineTextAlignment(.trailing)
                     }
+                    LabeledContent("信令端口") {
+                        TextField("21116", text: $signalPort).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("server.editor.signalPort")
+                    }
+                    LabeledContent("中继端口") {
+                        TextField("21117", text: $relayPort).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("server.editor.relayPort")
+                    }
                     Toggle("使用 HTTPS", isOn: $draft.useHTTPS)
                 } header: { Text("服务器信息") } footer: {
                     Text(validation ?? "主机和端口分开填写。测试连接不会保存修改。")
                         .foregroundStyle(validation == nil ? Color.secondary : Color.red)
+                }
+
+                if draft.caCertPem != nil || draft.caFingerprintSha256 != nil {
+                    Section("TLS 证书信任固定（TOFU）") {
+                        if let fp = draft.caFingerprintSha256, !fp.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("已固定 SHA-256 指纹")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(fp)
+                                    .font(.caption2.monospaced())
+                                    .textSelection(.enabled)
+                            }
+                        } else {
+                            Text("已锚定服务端自签 CA 证书")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("清除已固定证书并重新信任", role: .destructive) {
+                            draft.caCertPem = nil
+                            draft.caFingerprintSha256 = nil
+                            probeStatus = nil
+                        }
+                    }
                 }
 
                 if !auth.isLoggedIn {
@@ -388,8 +491,10 @@ private struct ServerEditorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: draft.useHTTPS) { probeStatus = nil }
-            .onChange(of: draft.host) { probeStatus = nil; draft.caCertPem = nil }
-            .onChange(of: port) { draft.apiPort = UInt16(port); draft.caCertPem = nil; probeStatus = nil }
+            .onChange(of: draft.host) { probeStatus = nil; draft.caCertPem = nil; draft.caFingerprintSha256 = nil }
+            .onChange(of: port) { draft.apiPort = UInt16(port); draft.caCertPem = nil; draft.caFingerprintSha256 = nil; probeStatus = nil }
+            .onChange(of: signalPort) { draft.signalPort = UInt16(signalPort) }
+            .onChange(of: relayPort) { draft.relayPort = UInt16(relayPort) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -400,6 +505,8 @@ private struct ServerEditorSheet: View {
                         var finalTarget = draft
                         finalTarget.host = finalTarget.host.trimmingCharacters(in: .whitespacesAndNewlines)
                         finalTarget.apiPort = UInt16(port)
+                        finalTarget.signalPort = UInt16(signalPort)
+                        finalTarget.relayPort = UInt16(relayPort)
                         auth.saveServer(name: name, target: finalTarget, replacing: existing)
                         if switchImmediately && !auth.isLoggedIn {
                             auth.serverTarget = finalTarget
@@ -419,11 +526,17 @@ private struct ServerEditorSheet: View {
         var target = draft
         target.host = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
         target.apiPort = UInt16(port)
+        target.signalPort = UInt16(signalPort)
+        target.relayPort = UInt16(relayPort)
         Task {
             switch await auth.probeServer(target) {
             case .success(let result):
-                draft = result.target
-                probeStatus = "连接成功 · \(result.latency) ms"
+                var updated = result.target
+                updated.signalPort = target.signalPort
+                updated.relayPort = target.relayPort
+                draft = updated
+                let regTag = auth.isRegistrationAllowed(for: updated) ? "" : " · 已关闭注册"
+                probeStatus = "连接成功 · \(result.latency) ms\(regTag)"
             case .failure(let error):
                 probeStatus = error.localizedDescription
             }

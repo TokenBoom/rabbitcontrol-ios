@@ -11,24 +11,45 @@ struct DeviceListView: View {
     private var auth: AuthService { .shared }
     private var lanService: LANDiscoveryService { .shared }
 
-    /// 局域网发现的设备 ID 集合(原始 + 去空格格式化两种形式)。
-    private var lanDeviceIDs: Set<String> {
-        Set(lanService.peers.compactMap(\.deviceID).flatMap { [$0, $0.replacingOccurrences(of: " ", with: "")] })
+    static func controllableDevices(
+        accountDevices: [AccountDevice],
+        peers: [LANPeer],
+        ownDeviceID: String?
+    ) -> [Device] {
+        let nearbyIDs = Set(
+            peers.compactMap(\.deviceID).flatMap { [$0, $0.replacingOccurrences(of: " ", with: "")] }
+        )
+        return AccountDevice.sortForSidebar(accountDevices)
+            .filter { $0.canShowInSidebar(ownDeviceID: ownDeviceID) }
+            .map { $0.card(nearbyIDs: nearbyIDs, ownDeviceID: ownDeviceID) }
+    }
+
+    static func allDevices(
+        accountDevices: [AccountDevice],
+        peers: [LANPeer],
+        ownDeviceID: String?
+    ) -> [Device] {
+        let nearbyIDs = Set(
+            peers.compactMap(\.deviceID).flatMap { [$0, $0.replacingOccurrences(of: " ", with: "")] }
+        )
+        return AccountDevice.sortForSidebar(accountDevices)
+            .map { $0.card(nearbyIDs: nearbyIDs, ownDeviceID: ownDeviceID) }
+    }
+
+    private var allAccountDevices: [Device] {
+        Self.allDevices(
+            accountDevices: auth.devices,
+            peers: lanService.peers,
+            ownDeviceID: RuntimeService.shared.deviceID
+        )
     }
 
     private var devices: [Device] {
-        let nearbyIDs = lanDeviceIDs
-        let ownID = RuntimeService.shared.deviceID?.replacingOccurrences(of: " ", with: "")
-        return auth.devices
-            .filter { dev in
-                if dev.os.lowercased() == "ios" { return false }
-                if let ownID, !ownID.isEmpty,
-                   dev.deviceID.replacingOccurrences(of: " ", with: "") == ownID {
-                    return false
-                }
-                return true
-            }
-            .map { $0.card(nearbyIDs: nearbyIDs) }
+        Self.controllableDevices(
+            accountDevices: auth.devices,
+            peers: lanService.peers,
+            ownDeviceID: RuntimeService.shared.deviceID
+        )
     }
 
     private var onlineDevices: [Device] { devices.filter(\.online) }
@@ -47,13 +68,18 @@ struct DeviceListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                if let error = auth.devicesError {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("未能刷新设备", rabbitIcon: .warning).font(.headline)
-                        Text(error).font(.footnote).foregroundStyle(.secondary)
-                        Button("重新加载") { Task { await auth.refreshDevices() } }.disabled(auth.loadingDevices)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
-                        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
+                if let uiErr = auth.devicesUiError {
+                    RCInlineErrorView(
+                        error: uiErr,
+                        actionLabelOverride: auth.loadingDevices ? nil : (uiErr.action == .relogin ? "重新登录" : "重新加载"),
+                        onAction: auth.loadingDevices ? nil : { action in
+                            if action == .relogin {
+                                auth.logout()
+                            } else {
+                                Task { await auth.refreshDevices() }
+                            }
+                        }
+                    )
                 }
 
                 if devices.isEmpty && auth.devicesError == nil {
@@ -113,7 +139,7 @@ struct DeviceListView: View {
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             NavigationLink {
-                AllDevicesView { devices }
+                AllDevicesView { allAccountDevices }
             } label: {
                 HStack(spacing: 4) {
                     RabbitIcon(.allDevices, size: 17)
@@ -178,9 +204,17 @@ struct DeviceSection: View {
 }
 
 /// 设备卡片:左侧壁纸缩略图(在线设备左上角叠「在线」pill),右侧名称+平台图标+chevron;
-/// 离线卡片整体降透明度。
+/// 离线卡片整体降透明度。支持 iPad 分栏列表中的选中态高亮。
 struct DeviceCard: View {
     var device: Device
+    var isSelected = false
+    var showsChevron = true
+
+    private var activeLocalSession: Bool {
+        let s = SessionService.shared
+        guard s.isConnected, let target = s.targetDeviceID else { return false }
+        return target.replacingOccurrences(of: " ", with: "") == device.id.replacingOccurrences(of: " ", with: "")
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -193,9 +227,9 @@ struct DeviceCard: View {
                 if device.online {
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(RCColor.online)
+                            .fill(activeLocalSession ? RCColor.accent : RCColor.online)
                             .frame(width: 6, height: 6)
-                        Text("在线")
+                        Text(activeLocalSession ? "在控" : "在线")
                             .font(.system(size: 10))
                             .foregroundStyle(.white)
                     }
@@ -211,6 +245,7 @@ struct DeviceCard: View {
                     Text(device.name)
                         .font(.headline)
                         .foregroundStyle(device.online ? RCColor.textPrimary : RCColor.textSecondary)
+                        .lineLimit(1)
                     if device.isLocal {
                         Text("LAN")
                             .font(.system(size: 9, weight: .bold))
@@ -219,16 +254,40 @@ struct DeviceCard: View {
                             .padding(.vertical, 1.5)
                             .background(RCColor.online, in: Capsule())
                     }
+                    if activeLocalSession || device.inSession {
+                        Text(activeLocalSession ? "本机在控" : "会话中")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(RCColor.accent)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(RCColor.accent.opacity(0.14), in: Capsule())
+                    }
                 }
                 Label(device.displayID, rabbitIcon: device.kind.icon)
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Spacer()
-            RabbitIcon(.chevronRight, size: 16)
-                .foregroundStyle(RCColor.textDisabled)
+            Spacer(minLength: 4)
+            if showsChevron {
+                RabbitIcon(.chevronRight, size: 16)
+                    .foregroundStyle(RCColor.textDisabled)
+            }
         }
         .padding(8)
-        .background(RCColor.bgWindow, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
+        .background(
+            isSelected ? RCColor.bgToolTile : RCColor.bgWindow,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(RCColor.accent.opacity(0.65), lineWidth: 1.5)
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(RCColor.popoverStroke, lineWidth: 0.5)
+            }
+        }
+        .shadow(color: .black.opacity(isSelected ? 0.06 : 0.03), radius: isSelected ? 6 : 3, y: 1)
     }
 }

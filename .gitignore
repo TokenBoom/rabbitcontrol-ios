@@ -7,5 +7,5 @@ DerivedData/
 .DS_Store
 *.log
 
-# xcframework 由 scripts/build-core-xcframework.sh 生成,不纳入版本控制
+# xcframework 由 scripts/fetch-core-xcframework.sh 从 Release 下载,不纳入版本控制
 Vendor/RabbitControlCore.xcframework/

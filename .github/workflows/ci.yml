@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      - name: Verify spec-lock integrity
+        run: python3 scripts/verify-spec-lock.py
       - name: Show toolchain versions
         run: |
           xcodebuild -version
@@ -33,16 +35,11 @@ jobs:
             "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
           ditto -x -k "$RUNNER_TEMP/xcodegen.zip" "$RUNNER_TEMP/xcodegen"
           echo "$(dirname "$(find "$RUNNER_TEMP/xcodegen" -type f -path '*/bin/xcodegen')")" >> "$GITHUB_PATH"
-      - name: Download prebuilt xcframework
+      - name: Download latest prebuilt xcframework from Release
         env:
-          XCF_TAG: "v0.1.18"
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # 预编译产物由 rabbitcontrol-apple-media 的 Release xcframework 工作流发布;
-          # 升级时同步修改 XCF_TAG(对应 media 仓的 release tag)。
-          mkdir -p Vendor
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/xcf.tar.gz" \
-            "https://github.com/TokenBoom/rabbitcontrol-apple-media/releases/download/${XCF_TAG}/RabbitControlCore.xcframework.tar.gz"
-          tar -xzf "$RUNNER_TEMP/xcf.tar.gz" -C Vendor
+          ./scripts/fetch-core-xcframework.sh --force
           ls Vendor/RabbitControlCore.xcframework
       - name: Generate project
         run: xcodegen generate

@@ -5,7 +5,7 @@ import UIKit
 /// 认证服务:对接 rabbitcontrol-server,管理登录会话与账号设备列表。
 ///
 /// FFI 调用全部为阻塞式,一律经 `Task.detached` 在后台线程执行。
-/// UI 登录令牌仅写入本机钥匙串。
+/// UI 登录令牌仅写入本机钥匙串；错误统一优先解码 `rc-mobile-ffi` 返回的 `ui_error`。
 @Observable
 final class AuthService {
     static let shared = AuthService()
@@ -15,18 +15,45 @@ final class AuthService {
         var useHTTPS: Bool
         /// TOFU 信任的 CA PEM(probe 时抓取);HTTPS 模式下校验用。
         var caCertPem: String?
+        var caFingerprintSha256: String?
         var apiPort: UInt16?
+        var signalPort: UInt16?
+        var relayPort: UInt16?
         var effectiveAPIPort: UInt16 { apiPort ?? 21118 }
+        var effectiveSignalPort: UInt16 { signalPort ?? 21116 }
+        var effectiveRelayPort: UInt16 { relayPort ?? 21117 }
+        var serverKey: String { "\(host):\(effectiveAPIPort):\(useHTTPS)" }
         var payload: [String: Any] {
             var data: [String: Any] = ["server_host": host, "api_port": effectiveAPIPort, "use_https": useHTTPS]
             data["ca_cert_pem"] = caCertPem
             return data
         }
+        var runtimePayload: [String: Any] {
+            var data = payload
+            data["signal_port"] = effectiveSignalPort
+            data["relay_port"] = effectiveRelayPort
+            if let caFingerprintSha256, !caFingerprintSha256.isEmpty {
+                data["ca_fingerprint_sha256"] = caFingerprintSha256
+            }
+            return data
+        }
 
-        init(host: String, useHTTPS: Bool, caCertPem: String? = nil) {
+        init(
+            host: String,
+            useHTTPS: Bool,
+            caCertPem: String? = nil,
+            caFingerprintSha256: String? = nil,
+            apiPort: UInt16? = nil,
+            signalPort: UInt16? = nil,
+            relayPort: UInt16? = nil
+        ) {
             self.host = host
             self.useHTTPS = useHTTPS
             self.caCertPem = caCertPem
+            self.caFingerprintSha256 = caFingerprintSha256
+            self.apiPort = apiPort
+            self.signalPort = signalPort
+            self.relayPort = relayPort
         }
 
         static let local = ServerTarget(host: "127.0.0.1", useHTTPS: false)
@@ -125,10 +152,16 @@ final class AuthService {
 
     private(set) var session: Session?
     private(set) var devices: [AccountDevice] = []
-    private(set) var devicesError: String?
+    private(set) var devicesUiError: RCUiError?
+    /// 各服务器最近探测到的 `allow_registration` 开关（未探测时默认 `true` 不误伤首次展示）。
+    private(set) var allowRegistrationByServer: [String: Bool] = [:]
+    var devicesError: String? {
+        devicesUiError.map { $0.message.isEmpty ? $0.title : $0.message }
+    }
     private(set) var loadingDevices = false
     private var refreshRequest: UUID?
     private var refreshTask: Task<Void, Never>?
+    private var inFlightTokenRefresh: Task<Bool, Never>?
     private let keychain = SessionKeychain()
     private(set) var previews: [String: UIImage] = [:]
 
@@ -138,6 +171,13 @@ final class AuthService {
     }
 
     var isLoggedIn: Bool { session != nil }
+    /// 首次登录强制改密门禁：为 `true` 时阻塞进入主界面与发起连接。
+    var requiresPasswordChange: Bool { session?.mustChangePassword == true }
+
+    func isRegistrationAllowed(for target: ServerTarget? = nil) -> Bool {
+        let key = (target ?? serverTarget).serverKey
+        return allowRegistrationByServer[key] ?? true
+    }
 
     /// UI 测试注入模式:无真实服务端时,以 mock 会话与 mock 设备驱动界面回归。
     static let uiTestingMock = ProcessInfo.processInfo.arguments.contains("-uiTestingMockAuth")
@@ -164,7 +204,9 @@ final class AuthService {
                     deviceID: device.id, formattedID: device.id,
                     hostname: device.name, os: device.kind.rawValue,
                     alias: device.name, allowRemoteAssist: true,
-                    disabled: false, online: device.online, inSession: false
+                    allowRemoteControl: true,
+                    disabled: false, online: device.online, inSession: false,
+                    wolCapable: !device.online && device.id == "gaming"
                 )
             }
             return
@@ -183,13 +225,13 @@ final class AuthService {
                 if saved.matches(serverTarget) { session = saved }
             }
         } catch {
-            devicesError = "无法读取钥匙串，请解锁设备后重试。"
+            devicesUiError = RCUiErrorCodec.fromError(error, fallbackCode: RCErrorCodes.platformIosKeychainError)
         }
     }
 
     // MARK: - 登录 / 注册
 
-    /// 登录(同步绑定本机设备)。失败抛出服务器返回的错误文案。
+    /// 登录(同步绑定本机设备)。失败抛出携带 `RCUiError` 的 `AuthError`。
     func login(email: String, password: String) async throws {
         try await authCall(isRegister: false, email: email, password: password)
     }
@@ -206,7 +248,9 @@ final class AuthService {
         // 先探测:TLS 服务端对明文连接会直接断开,probe 内会自动升级 HTTPS 并锚定 CA
         let requested = serverTarget
         let probe = await probeServer(requested)
-        guard serverTarget == requested else { throw AuthError.server("服务器设置已更改，请重新登录。") }
+        guard serverTarget == requested else {
+            throw AuthError.structured(CoreClient.resolveUiError(code: RCErrorCodes.authSuperseded))
+        }
         serverTarget = try probe.get().target
         let loginTarget = serverTarget
         var payload = serverTarget.payload
@@ -225,17 +269,20 @@ final class AuthService {
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AuthError.badResponse
         }
-        if let error = obj["error"] as? String {
-            throw AuthError.server(error)
+        if let uiErr = RCUiErrorCodec.extractEnvelopeError(from: obj) {
+            throw AuthError.structured(uiErr)
         }
         guard let access = obj["access_token"] as? String,
               let refresh = obj["refresh_token"] as? String else {
             throw AuthError.badResponse
         }
-        guard loginTarget == serverTarget else { throw AuthError.server("服务器设置已更改，请重新登录。") }
+        guard loginTarget == serverTarget else {
+            throw AuthError.structured(CoreClient.resolveUiError(code: RCErrorCodes.authSuperseded))
+        }
         let user = obj["user"] as? [String: Any]
         guard let userID = user?["id"] as? String else { throw AuthError.badResponse }
         let displayName = user?["display_name"] as? String ?? ""
+        let mustChangePwd = user?["must_change_password"] as? Bool
         let newSession = Session(
             accessToken: access,
             refreshToken: refresh,
@@ -244,14 +291,20 @@ final class AuthService {
             serverHost: serverTarget.host,
             useHTTPS: serverTarget.useHTTPS,
             userID: userID, expiresAt: Self.expiry(in: obj),
-            mustChangePassword: user?["must_change_password"] as? Bool, apiPort: loginTarget.effectiveAPIPort
+            mustChangePassword: mustChangePwd, apiPort: loginTarget.effectiveAPIPort
         )
-        try keychain.store(JSONEncoder().encode(newSession))
+        do {
+            try keychain.store(JSONEncoder().encode(newSession))
+        } catch {
+            throw AuthError.structured(RCUiErrorCodec.fromError(error, fallbackCode: RCErrorCodes.platformIosKeychainError))
+        }
         previews.removeAll()
         session = newSession
         rememberServer(serverTarget, email: email)
-        RuntimeService.shared.sync(newSession, target: loginTarget, rebuild: true)
-        await refreshDevices()
+        if mustChangePwd != true {
+            RuntimeService.shared.sync(newSession, target: loginTarget, rebuild: true)
+            await refreshDevices()
+        }
     }
 
     func logout() {
@@ -266,15 +319,22 @@ final class AuthService {
         SessionService.shared.close()
         refreshTask?.cancel()
         refreshTask = nil
+        inFlightTokenRefresh?.cancel()
+        inFlightTokenRefresh = nil
         refreshRequest = nil
         loadingDevices = false
         RuntimeService.shared.logout()
+        AppLockStore.shared.resetOnLogout()
         session = nil
         devices = []
         previews.removeAll()
-        devicesError = nil
+        devicesUiError = nil
         UserDefaults.standard.removeObject(forKey: "auth.session")
-        do { try keychain.remove() } catch { devicesError = "未能清除钥匙串，请解锁设备后重试。" }
+        do {
+            try keychain.remove()
+        } catch {
+            devicesUiError = RCUiErrorCodec.fromError(error, fallbackCode: RCErrorCodes.platformIosKeychainError)
+        }
     }
 
     // MARK: - 设备列表
@@ -286,9 +346,15 @@ final class AuthService {
         loadingDevices = true
         defer { if refreshRequest == request { loadingDevices = false; refreshRequest = nil } }
         if let session, (session.expiresAt ?? 0) < Date.now.timeIntervalSince1970 + 210 {
-            guard await refreshTokens() else { devicesError = "登录状态无法刷新，请检查网络或重新登录。"; return }
+            guard await refreshTokens() else {
+                if devicesUiError == nil {
+                    devicesUiError = CoreClient.resolveUiError(code: RCErrorCodes.authReloginRequired)
+                }
+                return
+            }
         }
         await loadDevices(canRefreshToken: true)
+        RuntimeService.shared.refreshSignalMetadata()
     }
 
     private func loadDevices(canRefreshToken: Bool) async {
@@ -301,26 +367,48 @@ final class AuthService {
             Self.withRustString(json.withCString { rc_auth_list_devices($0) })
         }.value
         guard self.session?.accessToken == session.accessToken else { return }
-        guard let raw, let data = raw.data(using: .utf8) else { devicesError = "服务器无响应"; return }
+        guard let raw, let data = raw.data(using: .utf8) else {
+            devicesUiError = CoreClient.resolveUiError(code: RCErrorCodes.networkUnreachable)
+            return
+        }
 
         if let arr = try? JSONDecoder().decode([AccountDevice].self, from: data) {
             devices = arr
             let ids = Set(arr.map(\.id))
             previews = previews.filter { ids.contains($0.key) }
-            devicesError = nil
+            devicesUiError = nil
         } else if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let error = obj["error"] as? String {
-            if canRefreshToken, error.contains("token_expired"), await refreshTokens() {
+                  let uiErr = RCUiErrorCodec.extractEnvelopeError(from: obj) {
+            let isExpiredToken = uiErr.code == RCErrorCodes.authTokenExpired || uiErr.code == RCErrorCodes.authUnauthorized
+            if canRefreshToken, isExpiredToken, await refreshTokens() {
                 await loadDevices(canRefreshToken: false)
             } else if self.session?.accessToken == session.accessToken {
-                devicesError = error
+                devicesUiError = uiErr
+                if uiErr.presentation == .modal {
+                    RCErrorCenter.shared.present(uiErr)
+                }
             }
-        } else { devicesError = "设备列表格式错误" }
+        } else {
+            devicesUiError = CoreClient.resolveUiError(code: RCErrorCodes.validationInvalidJson, detail: "设备列表格式错误")
+        }
     }
 
-    /// 用 refresh token 轮换访问令牌,成功返回 true 并持久化新会话。
+    /// 用 refresh token 轮换访问令牌（单飞互斥合并并发调用，防止重放吊销整族会话）。
     @discardableResult
     func refreshTokens() async -> Bool {
+        if let existing = inFlightTokenRefresh {
+            return await existing.value
+        }
+        let task = Task<Bool, Never> { @MainActor [weak self] in
+            guard let self else { return false }
+            defer { self.inFlightTokenRefresh = nil }
+            return await self.performTokenRefreshLocked()
+        }
+        inFlightTokenRefresh = task
+        return await task.value
+    }
+
+    private func performTokenRefreshLocked() async -> Bool {
         guard let session else { return false }
         var payload = serverTarget.payload
         payload["refresh_token"] = session.refreshToken
@@ -330,8 +418,16 @@ final class AuthService {
             Self.withRustString(json.withCString { rc_auth_refresh($0) })
         }.value
         guard let raw, let data = raw.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let access = obj["access_token"] as? String,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        if let uiErr = RCUiErrorCodec.extractEnvelopeError(from: obj) {
+            guard self.session?.refreshToken == session.refreshToken else { return false }
+            devicesUiError = uiErr
+            if uiErr.presentation == .modal {
+                RCErrorCenter.shared.present(uiErr)
+            }
+            return false
+        }
+        guard let access = obj["access_token"] as? String,
               let refresh = obj["refresh_token"] as? String else { return false }
         guard self.session?.refreshToken == session.refreshToken else { return false }
         var updated = session
@@ -341,7 +437,12 @@ final class AuthService {
         let user = obj["user"] as? [String: Any]
         updated.userID = user?["id"] as? String ?? updated.userID
         updated.mustChangePassword = user?["must_change_password"] as? Bool ?? updated.mustChangePassword
-        do { try keychain.store(JSONEncoder().encode(updated)) } catch { return false }
+        do {
+            try keychain.store(JSONEncoder().encode(updated))
+        } catch {
+            devicesUiError = RCUiErrorCodec.fromError(error, fallbackCode: RCErrorCodes.platformIosKeychainError)
+            return false
+        }
         self.session = updated
         RuntimeService.shared.sync(updated, target: serverTarget)
         return true
@@ -364,9 +465,7 @@ final class AuthService {
     // MARK: - 内部
 
     nonisolated private static func withRustString(_ ptr: UnsafeMutablePointer<CChar>?) -> String? {
-        guard let ptr else { return nil }
-        defer { rc_string_free(ptr) }
-        return String(cString: ptr)
+        CoreClient.withRustString(ptr)
     }
 
     /// 通用 FFI JSON 调用(后台线程),返回原始响应字符串。
@@ -389,53 +488,64 @@ final class AuthService {
         }.value
     }
 
-    private static func errorMessage(in raw: String?) -> String? {
-        guard let raw, let data = raw.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let error = obj["error"] as? String else { return nil }
-        return error
+    private static func envelopeUiError(in raw: String?) -> RCUiError? {
+        RCUiErrorCodec.extractEnvelopeError(fromRawJSON: raw)
     }
 
-    /// 探测服务器连通性,返回耗时毫秒或错误。
+    /// 探测服务器连通性,返回耗时毫秒或结构化错误。
     /// 明文探测失败时自动升级 HTTPS 重试(TLS 服务端会直接断开明文连接)。
     func probeServer(_ candidate: ServerTarget) async -> Result<(target: ServerTarget, latency: Int), AuthError> {
         var target = candidate
         var raw = await callFFI("probe", target.payload)
-        if Self.errorMessage(in: raw) != nil, !target.useHTTPS {
+        if Self.envelopeUiError(in: raw) != nil, !target.useHTTPS {
             var upgraded = target
             upgraded.useHTTPS = true
             let retry = await callFFI("probe", upgraded.payload)
-            if retry != nil, Self.errorMessage(in: retry) == nil {
+            if retry != nil, Self.envelopeUiError(in: retry) == nil {
                 target = upgraded
                 raw = retry
             }
         }
-        if let error = Self.errorMessage(in: raw) { return .failure(.server(error)) }
+        if let uiErr = Self.envelopeUiError(in: raw) {
+            return .failure(.structured(uiErr))
+        }
         guard let raw, let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let latency = obj["latency_ms"] as? Int else {
             return .failure(.noResponse)
         }
-        // TOFU:抓取服务端 CA 供后续 HTTPS/信令 TLS 校验
+        if let allowReg = obj["allow_registration"] as? Bool {
+            allowRegistrationByServer[candidate.serverKey] = allowReg
+            allowRegistrationByServer[target.serverKey] = allowReg
+        }
+        // TOFU:抓取服务端 CA 与指纹供后续 HTTPS/信令 TLS 校验
         if let bundle = obj["ca_bundle"] as? [String: Any],
            let pem = bundle["ca_cert_pem"] as? String {
             if let known = candidate.caCertPem, known != pem {
-                return .failure(.server("服务器 CA 已更换，未继续登录。请先核实新证书。"))
+                return .failure(.structured(CoreClient.resolveUiError(code: RCErrorCodes.pkiCaFingerprintMismatch)))
             }
             target.caCertPem = pem
+            if let fp = bundle["fingerprint_sha256"] as? String, !fp.isEmpty {
+                target.caFingerprintSha256 = fp
+            }
+        }
+        if target.caFingerprintSha256 == nil,
+           let leafFp = obj["tls_leaf_fingerprint_sha256"] as? String, !leafFp.isEmpty {
+            target.caFingerprintSha256 = leafFp
         }
         return .success((target, latency))
     }
 
-    /// 修改密码;成功后用新令牌更新会话。
+    /// 修改密码;成功后用新令牌更新会话，若处于首次强制改密态则自动解锁并拉起运行时与设备列表。
     func changePassword(current: String, new: String) async throws {
         guard let session else { throw AuthError.notLoggedIn }
+        let wasForceChange = session.mustChangePassword == true
         var payload = serverTarget.payload
         payload["access_token"] = session.accessToken
         payload["current_password"] = current
         payload["new_password"] = new
         let raw = await callFFI("change_password", payload)
-        if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
+        if let uiErr = Self.envelopeUiError(in: raw) { throw AuthError.structured(uiErr) }
         guard let raw, let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = obj["access_token"] as? String,
@@ -448,9 +558,16 @@ final class AuthService {
         updated.expiresAt = Self.expiry(in: obj)
         updated.mustChangePassword = false
         guard self.session?.refreshToken == session.refreshToken else { throw AuthError.notLoggedIn }
-        try keychain.store(JSONEncoder().encode(updated))
+        do {
+            try keychain.store(JSONEncoder().encode(updated))
+        } catch {
+            throw AuthError.structured(RCUiErrorCodec.fromError(error, fallbackCode: RCErrorCodes.platformIosKeychainError))
+        }
         self.session = updated
-        RuntimeService.shared.sync(updated, target: serverTarget)
+        RuntimeService.shared.sync(updated, target: serverTarget, rebuild: wasForceChange)
+        if wasForceChange {
+            await refreshDevices()
+        }
     }
 
     /// 重命名设备别名。
@@ -462,7 +579,7 @@ final class AuthService {
         payload["alias"] = alias
         let raw = await callFFI("rename", payload)
         guard let raw else { throw AuthError.noResponse }
-        if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
+        if let uiErr = Self.envelopeUiError(in: raw) { throw AuthError.structured(uiErr) }
         await refreshDevices()
     }
 
@@ -474,23 +591,41 @@ final class AuthService {
         payload["device_id"] = deviceID
         let raw = await callFFI("remove", payload)
         guard let raw else { throw AuthError.noResponse }
-        if let error = Self.errorMessage(in: raw) { throw AuthError.server(error) }
+        if let uiErr = Self.envelopeUiError(in: raw) { throw AuthError.structured(uiErr) }
         await refreshDevices()
     }
 
-    enum AuthError: LocalizedError {
+    nonisolated enum AuthError: LocalizedError, Equatable, Sendable {
         case notLoggedIn
         case noResponse
         case badResponse
         case server(String)
+        case structured(RCUiError)
+
+        var uiError: RCUiError {
+            switch self {
+            case .notLoggedIn:
+                CoreClient.resolveUiError(code: RCErrorCodes.authUnauthorized)
+            case .noResponse:
+                CoreClient.resolveUiError(code: RCErrorCodes.serviceRuntimeNotInitialized, detail: "核心库无响应")
+            case .badResponse:
+                CoreClient.resolveUiError(code: RCErrorCodes.validationInvalidJson, detail: "响应格式错误")
+            case .server(let message):
+                CoreClient.resolveUiError(code: RCErrorCodes.commonUnknown, detail: message)
+            case .structured(let err):
+                err
+            }
+        }
 
         var errorDescription: String? {
-            switch self {
-            case .notLoggedIn: "未登录"
-            case .noResponse: "核心库无响应"
-            case .badResponse: "响应格式错误"
-            case .server(let message): message
-            }
+            let ui = uiError
+            let msg = ui.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return msg.isEmpty ? ui.title : msg
+        }
+
+        var recoverySuggestion: String? {
+            let sug = uiError.suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
+            return sug.isEmpty ? nil : sug
         }
     }
 }
@@ -501,13 +636,22 @@ struct AccountDevice: Codable, Identifiable, Hashable {
     let formattedID: String
     let hostname: String
     let os: String
+    let appVersion: String
+    let arch: String
     let alias: String
     let allowRemoteAssist: Bool
+    let allowRemoteControl: Bool
     let disabled: Bool
     let online: Bool
     let inSession: Bool
+    let wolCapable: Bool
+    let boundAt: String?
+    let lastSeenAt: String?
 
     var id: String { deviceID }
+
+    /// 基线 §3.1：设备离线时自动清除 `inSession` 占位状态。
+    var effectiveInSession: Bool { online && inSession }
 
     /// 展示名:别名优先,其次主机名。
     var displayName: String {
@@ -516,15 +660,102 @@ struct AccountDevice: Codable, Identifiable, Hashable {
         return formattedID
     }
 
+    /// 基线 §3.1 `canShowInSidebar`：仅展示 `allowRemoteControl == true` 且非本机 iOS 的同账号受控设备。
+    func canShowInSidebar(ownDeviceID: String?) -> Bool {
+        guard allowRemoteControl else { return false }
+        if os.lowercased() == "ios" { return false }
+        if let own = ownDeviceID?.replacingOccurrences(of: " ", with: ""),
+           !own.isEmpty,
+           deviceID.replacingOccurrences(of: " ", with: "") == own {
+            return false
+        }
+        return true
+    }
+
+    /// 基线 §3.1 稳定排序：在线置顶、离线沉底，组内按 `last_seen_at DESC, device_id ASC` 排序。
+    nonisolated static func sortForSidebar(_ list: [AccountDevice]) -> [AccountDevice] {
+        list.sorted { lhs, rhs in
+            if lhs.online != rhs.online {
+                return lhs.online && !rhs.online
+            }
+            let lSeen = lhs.lastSeenAt ?? ""
+            let rSeen = rhs.lastSeenAt ?? ""
+            if lSeen != rSeen {
+                return lSeen > rSeen
+            }
+            return lhs.deviceID < rhs.deviceID
+        }
+    }
+
+    init(
+        deviceID: String,
+        formattedID: String,
+        hostname: String,
+        os: String,
+        appVersion: String = "",
+        arch: String = "",
+        alias: String,
+        allowRemoteAssist: Bool,
+        allowRemoteControl: Bool = true,
+        disabled: Bool,
+        online: Bool,
+        inSession: Bool,
+        wolCapable: Bool = false,
+        boundAt: String? = nil,
+        lastSeenAt: String? = nil
+    ) {
+        self.deviceID = deviceID
+        self.formattedID = formattedID
+        self.hostname = hostname
+        self.os = os
+        self.appVersion = appVersion
+        self.arch = arch
+        self.alias = alias
+        self.allowRemoteAssist = allowRemoteAssist
+        self.allowRemoteControl = allowRemoteControl
+        self.disabled = disabled
+        self.online = online
+        self.inSession = inSession
+        self.wolCapable = wolCapable
+        self.boundAt = boundAt
+        self.lastSeenAt = lastSeenAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        deviceID = try c.decode(String.self, forKey: .deviceID)
+        formattedID = try c.decodeIfPresent(String.self, forKey: .formattedID) ?? deviceID
+        hostname = try c.decodeIfPresent(String.self, forKey: .hostname) ?? ""
+        os = try c.decodeIfPresent(String.self, forKey: .os) ?? ""
+        appVersion = try c.decodeIfPresent(String.self, forKey: .appVersion) ?? ""
+        arch = try c.decodeIfPresent(String.self, forKey: .arch) ?? ""
+        alias = try c.decodeIfPresent(String.self, forKey: .alias) ?? ""
+        allowRemoteAssist = try c.decodeIfPresent(Bool.self, forKey: .allowRemoteAssist) ?? false
+        let fallbackControl = os.lowercased() != "ios" && os.lowercased() != "android"
+        allowRemoteControl = try c.decodeIfPresent(Bool.self, forKey: .allowRemoteControl) ?? fallbackControl
+        disabled = try c.decodeIfPresent(Bool.self, forKey: .disabled) ?? false
+        online = try c.decodeIfPresent(Bool.self, forKey: .online) ?? false
+        inSession = try c.decodeIfPresent(Bool.self, forKey: .inSession) ?? false
+        wolCapable = try c.decodeIfPresent(Bool.self, forKey: .wolCapable) ?? false
+        boundAt = try c.decodeIfPresent(String.self, forKey: .boundAt)
+        lastSeenAt = try c.decodeIfPresent(String.self, forKey: .lastSeenAt)
+    }
+
     enum CodingKeys: String, CodingKey {
         case deviceID = "device_id"
         case formattedID = "formatted_id"
         case hostname
         case os
+        case appVersion = "app_version"
+        case arch
         case alias
         case allowRemoteAssist = "allow_remote_assist"
+        case allowRemoteControl = "allow_remote_control"
         case disabled
         case online
         case inSession = "in_session"
+        case wolCapable = "wol_capable"
+        case boundAt = "bound_at"
+        case lastSeenAt = "last_seen_at"
     }
 }

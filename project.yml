@@ -24,6 +24,17 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
 
 targets:
+  RabbitControlSpec:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: RabbitControlIOS/Generated
+        type: syncedFolder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios.spec
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+
   RabbitControlIOS:
     type: application
     platform: iOS
@@ -32,13 +43,18 @@ targets:
       properties:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        "UIRequiresFullScreen~ipad": true
         # 仅用标准 TLS(mTLS/HTTPS),声明豁免加密,TestFlight 免人工合规确认
         ITSAppUsesNonExemptEncryption: false
     sources:
       - path: RabbitControlIOS
         type: syncedFolder
+        excludes:
+          - Generated
+          - "Generated/**"
     dependencies:
-      # rabbitcontrol-core 移动端 FFI 静态库,由 scripts/build-core-xcframework.sh 生成(静态链接,不嵌入)
+      - target: RabbitControlSpec
+      # rabbitcontrol-core 预编译移动端 FFI 静态库,由 scripts/fetch-core-xcframework.sh 从 Release 拉取(静态链接,不嵌入)
       - framework: Vendor/RabbitControlCore.xcframework
         embed: false
       # VideoToolbox 解码链路依赖的系统框架(rc-decode-vt 手工 FFI)
@@ -46,6 +62,7 @@ targets:
       - sdk: AudioToolbox.framework
       - sdk: CoreMedia.framework
       - sdk: CoreVideo.framework
+      - sdk: LocalAuthentication.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rabbitcontrol.ios
@@ -57,8 +74,9 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "RabbitControl 需要本地网络权限以发现局域网内的设备并建立低延迟直连。"
+        INFOPLIST_KEY_NSFaceIDUsageDescription: "RabbitControl 使用面容 ID 解锁本地应用锁，保护远程控制与设备凭据安全。"
 
   RabbitControlIOSTests:
     type: bundle.unit-test

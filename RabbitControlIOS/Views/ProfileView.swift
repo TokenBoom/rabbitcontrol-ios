@@ -4,9 +4,11 @@ import UIKit
 struct ProfileView: View {
     @State private var showChangePassword = false
     @State private var showServerConfig = false
+    @State private var showAboutSheet = false
     @State private var showLogoutConfirm = false
     @State private var showThemeDialog = false
     @State private var input = InteractionPrefs.shared
+    @State private var lockStore = AppLockStore.shared
     private var auth: AuthService { .shared }
     private var runtime: RuntimeService { .shared }
 
@@ -37,12 +39,32 @@ struct ProfileView: View {
                     Divider().padding(.leading, 44)
 
                     NavigationLink {
+                        ProxySettingsView()
+                    } label: {
+                        rowContent(icon: .portMap, title: "网络代理", trailing: ProxyConfigStore.shared.config.summaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("profile.网络代理")
+
+                    Divider().padding(.leading, 44)
+
+                    NavigationLink {
                         SettingsView()
                     } label: {
                         rowContent(icon: .settings, title: "远控默认设置", trailing: input.touchMode.label)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("profile.设置")
+
+                    Divider().padding(.leading, 44)
+
+                    NavigationLink {
+                        AppLockSettingsView()
+                    } label: {
+                        rowContent(icon: .lock, title: "本地应用锁", trailing: lockStore.isEnabled ? "已启用" : "未启用")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("profile.应用锁")
 
                     Divider().padding(.leading, 44)
 
@@ -61,19 +83,15 @@ struct ProfileView: View {
 
                         Divider().padding(.leading, 44)
                     }
-                    HStack(spacing: 12) {
-                        RabbitIcon(.devices, size: 20)
-                            .foregroundStyle(RCColor.textSecondary)
-                            .frame(width: 24)
-                        Text("关于 RabbitControl")
-                            .foregroundStyle(RCColor.textPrimary)
-                        Spacer()
-                        Text("v\(appVersion)")
-                            .font(.subheadline.monospaced())
-                            .foregroundStyle(RCColor.textSecondary)
+
+                    rowButton(
+                        icon: .devices,
+                        title: "关于与版本诊断",
+                        trailing: "v\(appVersion) · Core \(CoreClient.coreVersion)"
+                    ) {
+                        showAboutSheet = true
                     }
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 50)
+                    .accessibilityIdentifier("profile.关于")
                 }
 
                 if auth.isLoggedIn {
@@ -97,6 +115,7 @@ struct ProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showChangePassword) { ChangePasswordSheet() }
         .sheet(isPresented: $showServerConfig) { ServerConfigSheet() }
+        .sheet(isPresented: $showAboutSheet) { AboutDiagnosticsSheet(appVersion: appVersion) }
         .confirmationDialog("外观主题", isPresented: $showThemeDialog, titleVisibility: .visible) {
             Button(AppThemeMode.system == input.themeMode ? "跟随系统（当前）" : "跟随系统") { input.themeMode = .system }
             Button(AppThemeMode.light == input.themeMode ? "浅色（当前）" : "浅色") { input.themeMode = .light }
@@ -200,6 +219,104 @@ struct ProfileView: View {
         .padding(.horizontal, 16)
         .frame(minHeight: 50)
         .contentShape(Rectangle())
+    }
+}
+
+/// 版本与构建协议诊断弹层（对齐基线 §9.3 & §12.5 `CoreBuildInfo` 四端一致性核对）。
+struct AboutDiagnosticsSheet: View {
+    var appVersion: String
+    var embeddedInSplit = false
+    @Environment(\.dismiss) private var dismiss
+
+    private let buildInfo = CoreClient.buildInfo
+
+    private var diagnosticReportText: String {
+        var lines: [String] = [
+            "RabbitControl iOS v\(appVersion)",
+            "Core Version: \(buildInfo?.coreVersion ?? CoreClient.coreVersion)",
+        ]
+        if let info = buildInfo {
+            lines.append("Git Commit: \(info.gitCommit)")
+            lines.append("Build Timestamp: \(info.buildTimestamp)")
+            lines.append("ABI Version: \(info.abiVersion)")
+            lines.append("Session Protocol: v\(info.sessionProtocolVersion)")
+            lines.append("Punch Protocol: v\(info.punchVersion)")
+            lines.append("Beacon Protocol: v\(info.beaconVersion)")
+        }
+        let target = AuthService.shared.serverTarget
+        lines.append("Server: \(target.host) (API :\(target.effectiveAPIPort), Signal :\(target.effectiveSignalPort), Relay :\(target.effectiveRelayPort), HTTPS=\(target.useHTTPS))")
+        lines.append("Connection Mode: \(PrefsStore.shared.connectionMode.rawValue)")
+        lines.append("Proxy: \(ProxyConfigStore.shared.config.summaryText)")
+        lines.append("AV1 HW Decode: \(VideoCodec.isHardwareAV1DecodeSupported)")
+        return lines.joined(separator: "\n")
+    }
+
+    var body: some View {
+        if embeddedInSplit {
+            diagnosticsList
+        } else {
+            NavigationStack {
+                diagnosticsList
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { dismiss() }
+                        }
+                    }
+            }
+        }
+    }
+
+    private var diagnosticsList: some View {
+        List {
+                Section("客户端与核心引擎") {
+                    LabeledContent("iOS 应用版本", value: "v\(appVersion)")
+                    LabeledContent("核心库版本 (Core)", value: buildInfo?.coreVersion ?? CoreClient.coreVersion)
+                        .font(.body.monospacedDigit())
+                    if let info = buildInfo {
+                        LabeledContent("核心 Git Commit", value: info.gitCommit)
+                            .font(.subheadline.monospaced())
+                        LabeledContent("核心构建时间", value: info.buildTimestamp)
+                            .font(.caption.monospacedDigit())
+                    }
+                }
+
+                if let info = buildInfo {
+                    Section("跨端协议与 ABI 契约") {
+                        LabeledContent("FFI ABI 版本", value: "v\(info.abiVersion)")
+                            .font(.body.monospacedDigit())
+                        LabeledContent("会话协议版本 (Session)", value: "v\(info.sessionProtocolVersion)")
+                            .font(.body.monospacedDigit())
+                        LabeledContent("打洞协议版本 (Punch)", value: "v\(info.punchVersion)")
+                            .font(.body.monospacedDigit())
+                        LabeledContent("局域网信标版本 (Beacon)", value: "v\(info.beaconVersion)")
+                            .font(.body.monospacedDigit())
+                    }
+                }
+
+                Section("硬件媒体与网络能力") {
+                    LabeledContent("VideoToolbox H.265 硬解", value: "支持")
+                    LabeledContent("VideoToolbox AV1 硬解", value: VideoCodec.isHardwareAV1DecodeSupported ? "支持" : "当前机型不支持（自动降级）")
+                    LabeledContent("默认路由模式", value: PrefsStore.shared.connectionMode.shortLabel)
+                    LabeledContent("出站网络代理", value: ProxyConfigStore.shared.config.summaryText)
+                }
+
+                Section {
+                    Button {
+                        UIPasteboard.general.string = diagnosticReportText
+                        ToastCenter.shared.show("已复制完整诊断信息")
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("复制完整诊断报告", rabbitIcon: .clipboard)
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
+                    }
+                    .accessibilityIdentifier("about.copyDiagnostics")
+                }
+            }
+        .navigationTitle("关于与版本诊断")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

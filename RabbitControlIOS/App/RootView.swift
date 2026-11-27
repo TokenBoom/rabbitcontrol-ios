@@ -1,25 +1,60 @@
 import SwiftUI
 
 struct RootView: View {
-    enum Tab { case devices, assist, profile }
+    enum Tab: Hashable { case devices, assist, profile }
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @State private var assistFlow = AssistFlow.shared
     @State private var inputPrefs = InteractionPrefs.shared
+    @State private var lockStore = AppLockStore.shared
     @State private var selection: Tab = .devices
     private var auth: AuthService { .shared }
 
     var body: some View {
         Group {
-            if auth.isLoggedIn { home } else { LoginView() }
+            if !auth.isLoggedIn {
+                LoginView()
+            } else if auth.requiresPasswordChange {
+                ForceChangePasswordView()
+            } else {
+                home
+            }
         }
         .preferredColorScheme(inputPrefs.themeMode.colorScheme)
+        .allowsHitTesting(!lockStore.isLocked)
+        .accessibilityHidden(lockStore.isLocked)
+        .overlay {
+            if lockStore.isLocked {
+                AppLockOverlayView()
+                    .transition(.opacity)
+            }
+        }
+        .overlay { RCErrorRootOverlay(center: .shared) }
         .overlay { ToastOverlay(center: .shared).allowsHitTesting(false).animation(.easeInOut(duration: 0.2), value: ToastCenter.shared.message) }
+        .onAppear {
+            if SessionOrientationLock.isPad {
+                SessionOrientationLock.restore()
+            }
+        }
         .onChange(of: auth.isLoggedIn) {
             if !auth.isLoggedIn { selection = .devices }
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            lockStore.handleScenePhase(newPhase)
+        }
     }
 
-    /// 登录后的主页;未登录时与 Android 一致,只显示登录/注册。
+    /// 登录后的主页：`compact` 保持单栏 + 底部标签栏，`regular`（iPad 宽屏）切换至侧边栏工作台。
+    @ViewBuilder
     private var home: some View {
+        if RCLayout.usesWorkspaceSplit(horizontalSizeClass) {
+            IPadWorkspaceView(selection: $selection)
+        } else {
+            phoneHome
+        }
+    }
+
+    private var phoneHome: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 Group {

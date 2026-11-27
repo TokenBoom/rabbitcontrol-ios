@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// O1「更多工具」移动端弹层:沿用桌面端浅蓝工具卡 + 白底电源项结构。
-enum DeviceMoreToolAction: CaseIterable, Hashable {
+/// O1「更多工具」移动端弹层:支持用户自定义工具顺序持久化（对齐桌面端浅蓝工具卡 + 白底电源项结构）。
+enum DeviceMoreToolAction: String, CaseIterable, Codable, Hashable {
     case files, watch, terminal, portMapping
 
     var title: String {
@@ -30,6 +30,23 @@ enum DeviceMoreToolAction: CaseIterable, Hashable {
         case .portMapping: "moreTools.portMapping"
         }
     }
+
+    private static let orderKey = "moreTools.customOrder"
+
+    static func loadOrdered() -> [DeviceMoreToolAction] {
+        guard let saved = UserDefaults.standard.stringArray(forKey: orderKey) else {
+            return allCases
+        }
+        var result = saved.compactMap { DeviceMoreToolAction(rawValue: $0) }
+        for item in allCases where !result.contains(item) {
+            result.append(item)
+        }
+        return result
+    }
+
+    static func saveOrdered(_ list: [DeviceMoreToolAction]) {
+        UserDefaults.standard.set(list.map(\.rawValue), forKey: orderKey)
+    }
 }
 
 enum DevicePowerAction: String, Identifiable {
@@ -39,7 +56,7 @@ enum DevicePowerAction: String, Identifiable {
     var id: String { rawValue }
     var verb: String { self == .reboot ? "重启" : "关机" }
     var title: String { "\(verb)设备" }
-    var command: String { self == .reboot ? "reboot" : "shutdown" }
+    var command: String { self == .reboot ? "sudo shutdown -r now" : "sudo shutdown -h now" }
     var icon: RabbitIcon.Name { self == .reboot ? .restart : .power }
 
     var accessibilityID: String {
@@ -50,37 +67,64 @@ enum DevicePowerAction: String, Identifiable {
 struct MoreToolsMenuView: View {
     var onTool: (DeviceMoreToolAction) -> Void
     var onPower: (DevicePowerAction) -> Void
-    var onReorder: () -> Void
     var onClose: () -> Void
     var isCovered = false
+
+    @State private var orderedActions: [DeviceMoreToolAction] = DeviceMoreToolAction.loadOrdered()
+    @State private var isReordering = false
 
     var body: some View {
         ZStack {
             RCColor.modalMask.ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("更多工具")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(RCColor.textPrimary)
-                    .accessibilityHidden(isCovered)
+                HStack {
+                    Text(isReordering ? "调整工具顺序" : "更多工具")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(RCColor.textPrimary)
+                        .accessibilityHidden(isCovered)
+                    Spacer()
+                    if isReordering {
+                        Button("恢复默认") {
+                            withAnimation(.snappy(duration: 0.2)) {
+                                orderedActions = DeviceMoreToolAction.allCases
+                                DeviceMoreToolAction.saveOrdered(orderedActions)
+                            }
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(RCColor.accent)
+                    }
+                }
 
                 VStack(spacing: 10) {
-                    ForEach(DeviceMoreToolAction.allCases, id: \.self) { action in
-                        toolRow(action)
+                    ForEach(Array(orderedActions.enumerated()), id: \.element) { idx, action in
+                        if isReordering {
+                            reorderRow(action, index: idx)
+                        } else {
+                            toolRow(action)
+                        }
                     }
-                    powerRow(.reboot)
-                        .padding(.top, 6)
-                    powerRow(.shutdown)
+                    if !isReordering {
+                        powerRow(.reboot)
+                            .padding(.top, 6)
+                        powerRow(.shutdown)
+                    }
                 }
                 .padding(.top, 16)
 
                 HStack {
-                    Button("调整顺序", action: onReorder)
-                        .buttonStyle(RCModalSecondaryButtonStyle())
-                        .accessibilityIdentifier("moreTools.reorder")
-                        .disabled(isCovered)
-                        .accessibilityHidden(isCovered)
+                    Button(isReordering ? "完成排序" : "调整顺序") {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            isReordering.toggle()
+                        }
+                    }
+                    .buttonStyle(RCModalSecondaryButtonStyle())
+                    .accessibilityIdentifier("moreTools.reorder")
+                    .disabled(isCovered)
+                    .accessibilityHidden(isCovered)
+
                     Spacer()
+
                     Button("关闭", action: onClose)
                         .buttonStyle(RCModalSecondaryButtonStyle())
                         .accessibilityIdentifier("moreTools.close")
@@ -117,6 +161,52 @@ struct MoreToolsMenuView: View {
         .accessibilityIdentifier(action.accessibilityID)
         .disabled(isCovered)
         .accessibilityHidden(isCovered)
+    }
+
+    private func reorderRow(_ action: DeviceMoreToolAction, index: Int) -> some View {
+        HStack(spacing: 12) {
+            RabbitIcon(action.icon, size: 20)
+                .foregroundStyle(RCColor.accent)
+                .frame(width: 24)
+            Text(action.title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(RCColor.textPrimary)
+            Spacer()
+            Button {
+                guard index > 0 else { return }
+                withAnimation(.snappy(duration: 0.18)) {
+                    orderedActions.swapAt(index, index - 1)
+                    DeviceMoreToolAction.saveOrdered(orderedActions)
+                }
+            } label: {
+                RabbitIcon(.arrowUp, size: 15)
+                    .foregroundStyle(index > 0 ? RCColor.accent : RCColor.textDisabled)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .disabled(index == 0)
+
+            Button {
+                guard index < orderedActions.count - 1 else { return }
+                withAnimation(.snappy(duration: 0.18)) {
+                    orderedActions.swapAt(index, index + 1)
+                    DeviceMoreToolAction.saveOrdered(orderedActions)
+                }
+            } label: {
+                RabbitIcon(.arrowDown, size: 15)
+                    .foregroundStyle(index < orderedActions.count - 1 ? RCColor.accent : RCColor.textDisabled)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .disabled(index >= orderedActions.count - 1)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 54)
+        .background(RCColor.bgToolTile, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(RCColor.toolTileStroke, lineWidth: 1)
+        }
     }
 
     private func powerRow(_ action: DevicePowerAction) -> some View {
@@ -165,7 +255,7 @@ struct DevicePowerConfirmView: View {
                 Text(action.title)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(RCColor.textPrimary)
-                Text("确认要\(action.verb)「\(deviceName)」吗？")
+                Text("确认要\(action.verb)「\(deviceName)」吗？将打开远程终端并预填 `\(action.command)` 以便验证系统密码执行。")
                     .font(.system(size: 13))
                     .foregroundStyle(RCColor.textSecondary)
                     .padding(.top, 8)

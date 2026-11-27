@@ -17,9 +17,13 @@ struct RabbitControlIOSApp: App {
 
     init() {
         _ = rc_apple_media_init()
+        ProxyConfigStore.shared.applyPersistedOnStartup()
         let target = AuthService.shared.serverTarget
-        RuntimeService.shared.sync(AuthService.shared.session, target: target, rebuild: true)
+        if !AuthService.shared.requiresPasswordChange {
+            RuntimeService.shared.sync(AuthService.shared.session, target: target, rebuild: true)
+        }
         LANDiscoveryService.shared.start()
+        NetworkMonitorService.shared.start()
     }
 
     var body: some Scene {

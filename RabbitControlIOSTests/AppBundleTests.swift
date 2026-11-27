@@ -22,8 +22,9 @@ struct AppBundleTests {
         #expect(!build.isEmpty && build.allSatisfy(\.isNumber))
     }
 
-    @Test("已声明本地网络权限的用途说明")
-    func localNetworkUsageDescription() {
+    @Test("已声明本地网络与面容 ID 权限的用途说明")
+    func localNetworkAndFaceIDUsageDescription() {
         #expect(!(string("NSLocalNetworkUsageDescription") ?? "").isEmpty)
+        #expect(!(string("NSFaceIDUsageDescription") ?? "").isEmpty)
     }
 }

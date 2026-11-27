@@ -1,0 +1,12 @@
+{
+  "spec_repo": "TokenBoom/rabbitcontrol-spec",
+  "spec_version": "1.0.0",
+  "files": [
+    {
+      "artifact": "swift-ios",
+      "source": "dist/swift-ios/RCErrorModels.swift",
+      "target": "RabbitControlIOS/Generated/RCErrorModels.swift",
+      "sha256": "f2abb402013d3899c19146a6daaedebadf937db9919ae37beedb7142c9e1ac91"
+    }
+  ]
+}

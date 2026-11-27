@@ -56,4 +56,13 @@ final class LANDiscoveryService {
         pollingTask = nil
         CoreClient.stopLANDiscovery()
     }
+
+    /// 切网时清空旧子网缓存并在 Wi-Fi/有线环境下重新拉起多播发现。
+    func restartForNetworkChange(hasLAN: Bool) {
+        stop()
+        peers = []
+        if hasLAN {
+            start()
+        }
+    }
 }

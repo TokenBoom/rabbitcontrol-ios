@@ -104,6 +104,26 @@ struct MetalVideoViewTests {
         #expect(view.delegate.map(ObjectIdentifier.init) == rendererID)
     }
 
+    @Test("ProMotion 高刷动态帧率：60fps 及以下保底 60Hz，90/120fps 拉满屏幕上限")
+    func preferredFramesPerSecondAdaptsToProMotion() {
+        #expect(MetalVideoView.resolvedPreferredFramesPerSecond(targetFps: 30, screenMaxFps: 60) == 60)
+        #expect(MetalVideoView.resolvedPreferredFramesPerSecond(targetFps: 120, screenMaxFps: 60) == 60)
+        #expect(MetalVideoView.resolvedPreferredFramesPerSecond(targetFps: 30, screenMaxFps: 120) == 60)
+        #expect(MetalVideoView.resolvedPreferredFramesPerSecond(targetFps: 60, screenMaxFps: 120) == 60)
+        #expect(MetalVideoView.resolvedPreferredFramesPerSecond(targetFps: 90, screenMaxFps: 120) == 120)
+        #expect(MetalVideoView.resolvedPreferredFramesPerSecond(targetFps: 120, screenMaxFps: 120) == 120)
+    }
+
+    @Test("v0.1.18 零分配帧接口在无待取帧时直接返回 false")
+    func rawFrameTakeFastPathWhenEmpty() {
+        var raw = RcAppleFrame()
+        if !rc_apple_media_frame_take_raw(&raw) {
+            #expect(raw.ptr == 0)
+        } else if raw.ptr != 0 {
+            rc_apple_media_frame_release(raw.ptr)
+        }
+    }
+
     @MainActor
     private func metalView(in view: UIView) -> MTKView? {
         if let metal = view as? MTKView { return metal }
