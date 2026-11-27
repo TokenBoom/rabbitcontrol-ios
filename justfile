@@ -67,6 +67,33 @@ install team="XLH6BHWSX2": fetch-core gen
     xcrun devicectl device install app --device "$CORE_ID" DerivedData/Build/Products/Debug-iphoneos/RabbitControlIOS.app
     xcrun devicectl device process launch --device "$CORE_ID" com.rabbitcontrol.ios || echo "✓ 已安装完成（手机当前锁屏，解锁后即可直接打开 RabbitControl）"
 
+# 打包 Release 归档并直接上传至 App Store Connect / TestFlight（自动管理构建号与分发签名）
+testflight team="XLH6BHWSX2": fetch-core
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v xcodegen >/dev/null 2>&1; then xcodegen generate; fi
+    TMP_ENT="$(mktemp -t rc-tf-ent).plist"
+    TMP_EXP="$(mktemp -t rc-tf-export).plist"
+    trap 'rm -f "$TMP_ENT" "$TMP_EXP"' EXIT
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict/></plist>' > "$TMP_ENT"
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict><key>method</key><string>app-store-connect</string><key>destination</key><string>upload</string><key>signingStyle</key><string>automatic</string><key>teamID</key><string>{{team}}</string><key>manageAppVersionAndBuildNumber</key><true/></dict></plist>' > "$TMP_EXP"
+    rm -rf DerivedData/RabbitControlIOS.xcarchive DerivedData/TestFlightExport
+    xcodebuild archive \
+        -project RabbitControlIOS.xcodeproj \
+        -scheme RabbitControlIOS \
+        -configuration Release \
+        -destination "generic/platform=iOS" \
+        -archivePath DerivedData/RabbitControlIOS.xcarchive \
+        DEVELOPMENT_TEAM="{{team}}" \
+        CODE_SIGN_STYLE=Automatic \
+        CODE_SIGN_ENTITLEMENTS="$TMP_ENT" \
+        -allowProvisioningUpdates
+    xcodebuild -exportArchive \
+        -archivePath DerivedData/RabbitControlIOS.xcarchive \
+        -exportOptionsPlist "$TMP_EXP" \
+        -exportPath DerivedData/TestFlightExport \
+        -allowProvisioningUpdates
+
 # 删除生成的工程
 clean:
     rm -rf RabbitControlIOS.xcodeproj

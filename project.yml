@@ -43,7 +43,10 @@ targets:
       properties:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
-        "UIRequiresFullScreen~ipad": true
+        UIRequiresFullScreen: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations: {}
         # 仅用标准 TLS(mTLS/HTTPS),声明豁免加密,TestFlight 免人工合规确认
         ITSAppUsesNonExemptEncryption: false
     sources:
@@ -71,8 +74,8 @@ targets:
         # Xcode 将构建设置与上方 info.properties 合并为最终 Info.plist。
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_CFBundleDisplayName: RabbitControl
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        INFOPLIST_KEY_UIRequiresFullScreen: "YES"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "RabbitControl 需要本地网络权限以发现局域网内的设备并建立低延迟直连。"
